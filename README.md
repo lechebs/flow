@@ -1,4 +1,4 @@
-# Stokes-Brinkman finite-difference ADI implicit solver
+# Stokes-Brinkman finite-difference ADI solver
 
 ## Gallery
 
