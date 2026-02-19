@@ -1,10 +1,16 @@
-# Stokes-Brinkman finite-difference fluid solver
+# Stokes-Brinkman finite-difference ADI implicit solver
 
 ## Gallery
 
 | ![](images/obstacles-velocity.png) |  ![](images/obstacles-pressure.png) |
 |:--------:|:-------:|
 | Velocity field magnitude | Pressure colored velocity field |
+
+## Performance
+
+Currently running in **single-core** on Intel Ultra 7 155H (2023).
+
+![](images/performance.png)
 
 ## TODO
 
