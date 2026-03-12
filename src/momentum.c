@@ -892,9 +892,9 @@ void compute_rhs_vtile(const ftype *restrict porosity,
                        uint32_t i,
                        uint32_t j,
                        uint32_t k,
-                       uint32_t depth,
-                       uint32_t height,
-                       uint32_t width,
+                       int depth,
+                       int height,
+                       int width,
                        uint32_t timestep,
                        ftype *restrict rhs_x_t,
                        ftype *restrict rhs_y_t,
@@ -977,6 +977,77 @@ void compute_rhs_vtile(const ftype *restrict porosity,
     compute_Dxx_Dyy_Dzz(eta_z, zeta_z, vel_z,
                         is_last_face, is_last_row, is_last_col, COMPONENT_Z,
                         i, j, k, depth, height, width, timestep, rhs_z_t);
+
+    /* Advective term of the skew-symmetric convective form. */
+    for (int jj = 0; jj < VLEN; ++jj) {
+        for (int kk = 0; kk < VLEN; ++kk) {
+
+            ftype vy_avg = 0.25 * (vel_y[jj * width + kk] +
+                                   vel_y[jj * width + kk + 1] +
+                                   vel_y[(jj - 1) * width + kk] +
+                                   vel_y[(jj - 1) * width + kk + 1]);
+
+            ftype vz_avg = 0.25 * (vel_z[jj * width + kk] +
+                                   vel_z[jj * width + kk + 1] +
+                                   vel_z[jj * width + kk - height * width] +
+                                   vel_z[jj * width + kk - height * width + 1]);
+
+            rhs_x_t[jj * VLEN + kk] -=
+                vel_x[jj * width + kk] *
+                    (vel_x[jj * width + kk + 1] -
+                     vel_x[jj * width + kk - 1]) / (2 * _DX) +
+
+                vy_avg * (vel_x[(jj + 1) * width + kk] -
+                          vel_x[(jj - 1) * width + kk]) / (2 * _DX) +
+
+                vz_avg * (vel_x[jj * width + kk + height * width] -
+                          vel_x[jj * width + kk - height * width]) / (2 * _DX);
+
+
+            ftype vx_avg = 0.25 * (vel_x[jj * width + kk] +
+                                   vel_x[jj * width + kk - 1] +
+                                   vel_x[(jj + 1) * width + kk] +
+                                   vel_x[(jj + 1) * width + kk - 1]);
+
+            vz_avg = 0.25 * (vel_z[jj * width + kk] +
+                             vel_z[(jj + 1) * width + kk] +
+                             vel_z[jj * width + kk - height * width] +
+                             vel_z[(jj + 1) * width + kk - height * width]);
+
+            rhs_y_t[jj * VLEN + kk] -=
+                vx_avg * (vel_y[jj * width + kk + 1] -
+                          vel_y[jj * width + kk - 1]) / (2 * _DX) +
+
+                vel_y[jj * width + kk] *
+                    (vel_y[(jj + 1) * width + kk] -
+                     vel_y[(jj - 1) * width + kk]) / (2 * _DX) +
+
+                vz_avg * (vel_y[jj * width + kk + height * width] -
+                          vel_y[jj * width + kk - height * width]) / (2 * _DX);
+
+
+            vx_avg = 0.25 * (vel_x[jj * width + kk] +
+                             vel_x[jj * width + kk - 1] +
+                             vel_x[jj * width + kk + height * width] +
+                             vel_x[jj * width + kk + height * width - 1]);
+
+            vy_avg = 0.25 * (vel_y[jj * width + kk] +
+                             vel_y[(jj - 1) * width + kk] +
+                             vel_y[jj * width + kk + height * width] +
+                             vel_y[(jj - 1) * width + kk + height * width]);
+
+            rhs_z_t[jj * VLEN + kk] -=
+                vx_avg * (vel_z[jj * width + kk + 1] -
+                          vel_z[jj * width + kk - 1]) / (2 * _DX) +
+
+                vy_avg * (vel_z[(jj + 1) * width + kk] -
+                          vel_z[(jj - 1) * width + kk]) / (2 * _DX) +
+
+                vel_z[jj * width + kk] *
+                    (vel_z[jj * width + kk + height * width] -
+                     vel_z[jj * width + kk - height * width]) / (2 * _DX);
+        }
+    }
 
     /* eps_i = (1 + 2 nu dt / (2k_i + nu dt)) u_i + .. */
 
@@ -1866,12 +1937,14 @@ void momentum_init(field_size size, field3 field)
     field3_fill(size, 0, field);
 
     /* WARNING: Dummy initialization for lid-driven cavity. */
+    /*
     for (uint32_t i = 0; i < size.depth; ++i) {
         for (uint32_t k = 0; k < size.width; ++k) {
             uint64_t idx = field_idx(size, k, 0, i);
             field.x[idx] = 1.0;
         }
     }
+    */
 }
 
 void momentum_solve(const_field porosity,
