@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 
 #include "alloc.h"
 #include "boundary.h"
@@ -9,23 +10,35 @@
 #include "output.h"
 #include "thread-array.h"
 
-#define DEPTH 256
-#define HEIGHT 256
-#define WIDTH 256
+#define DEPTH 32
+#define HEIGHT 96
+#define WIDTH 64
 
-#define NUM_TIMESTEPS 10
+#define NUM_TIMESTEPS 160000
 
 #define NUM_THREADS 4
 
-DEFINE_NU(1.0)
-DEFINE_DT(0.025)
-DEFINE_DX(M_PI / WIDTH)
+DEFINE_NU(0.00008)
+DEFINE_DT(0.0001)
+DEFINE_DX(1.0 / WIDTH)
 
 DEFINE_CONSTANT_FORCING(0, 0, 0)
 
+static ftype bc_zero(ftype x, ftype y, ftype z, ftype t)
+{
+    return 0;
+}
+
+static ftype bc_inlet(ftype x, ftype y, ftype z, ftype t)
+{
+    return (1.0 - exp(-t));
+}
+
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_LEFT)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_RIGHT)
-DEFINE_CONSTANT_BC_U(0, 0.1, 0, BC_TOP)
+//DEFINE_CONSTANT_BC_U(0, 0.1, 0, BC_TOP)
+DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_TOP)
+//DEFINE_FUNCTION_BC_U(bc_zero, bc_zero, bc_inlet, BC_BOTTOM)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BOTTOM)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_FRONT)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BACK)
@@ -52,12 +65,14 @@ static void *run_simulation(void *t_data)
         TIMER_RESTART(solver_step_aggregate);
         solver_step(solver, t, t_data);
 
-        char output_file_name[64];
-        sprintf(output_file_name, "output/solution-cavity-%d.vtk", t);
-        TIMEITN(output_vtk_write(output, output_file_name, t_data), 1);
+        if (t % 1600 == 0) {
+            char output_file_name[64];
+            sprintf(output_file_name, "output/solution-cavity-%d.vtk", t);
+            output_vtk_write(output, output_file_name, t_data);
+        }
 
         TIMER_ELAPSED(solver_step_aggregate, t_id == 0);
-        if (t_id == 0) { printf("\n"); }
+        if (t_id == 0) { printf("%d/%d\n", t, NUM_TIMESTEPS); }
     }
 
     return 0;
@@ -74,8 +89,8 @@ int main(void)
     field_size size = { WIDTH, HEIGHT, DEPTH };
     OutputVTK *output = output_vtk_create(size, _DX, &arena);
 
-    //output_vtk_attach_field(output, solver_get_porosity(solver),
-    //                        "porosity", &arena);
+    output_vtk_attach_field(output, solver_get_porosity(solver),
+                            "porosity", &arena);
     output_vtk_attach_field(output, solver_get_pressure(solver),
                             "pressure", &arena);
     output_vtk_attach_field3(output, solver_get_velocity(solver),
