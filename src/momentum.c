@@ -977,9 +977,17 @@ void compute_rhs_vtile(const ftype *restrict k_x,
                         is_last_face, is_last_row, is_last_col, COMPONENT_Z,
                         i, j, k, depth, height, width, timestep, rhs_z_t);
 
-    /* Advective term of the skew-symmetric convective form. */
+    /* TODO: Figure out if the porosity jump is causing that
+     * weird behaviour in the visualization. */
+
+    /* Naively computing the advective term of
+     * the skew-symmetric convective form. */
+
+
     for (int jj = 0; jj < VLEN; ++jj) {
         for (int kk = 0; kk < VLEN; ++kk) {
+
+            /* TODO: Handle borders using interpolation. */
 
             ftype vy_avg = 0.25 * (vel_y[jj * width + kk] +
                                    vel_y[jj * width + kk + 1] +
@@ -991,7 +999,7 @@ void compute_rhs_vtile(const ftype *restrict k_x,
                                    vel_z[jj * width + kk - height * width] +
                                    vel_z[jj * width + kk - height * width + 1]);
 
-            rhs_x_t[jj * VLEN + kk] -=
+            rhs_x_t[jj * VLEN + kk] -= 0.5 * (
                 vel_x[jj * width + kk] *
                     (vel_x[jj * width + kk + 1] -
                      vel_x[jj * width + kk - 1]) / (2 * _DX) +
@@ -1000,8 +1008,24 @@ void compute_rhs_vtile(const ftype *restrict k_x,
                           vel_x[(jj - 1) * width + kk]) / (2 * _DX) +
 
                 vz_avg * (vel_x[jj * width + kk + height * width] -
-                          vel_x[jj * width + kk - height * width]) / (2 * _DX);
+                          vel_x[jj * width + kk - height * width]) / (2 * _DX) +
 
+                ((0.5 * vel_x[jj * width + kk + 1] + 0.5 * vel_x[jj * width + kk]) *
+                 (0.5 * vel_x[jj * width + kk + 1] + 0.5 * vel_x[jj * width + kk]) -
+                 (0.5 * vel_x[jj * width + kk - 1] + 0.5 * vel_x[jj * width + kk]) *
+                 (0.5 * vel_x[jj * width + kk - 1] + 0.5 * vel_x[jj * width + kk])) / _DX +
+
+                ((0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[(jj + 1) * width + kk]) *
+                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk + 1]) -
+                 (0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[(jj - 1) * width + kk]) *
+                 (0.5 * vel_y[(jj - 1) * width + kk] + 0.5 * vel_y[(jj - 1) * width + kk + 1])) / _DX +
+
+                ((0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[jj * width + kk + height * width]) *
+                 (0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[jj * width + kk + 1]) -
+                 (0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[jj * width + kk - height * width]) *
+                 (0.5 * vel_z[jj * width + kk - height * width] +
+                  0.5 * vel_z[jj * width + kk - height * width + 1])) / _DX
+            );
 
             ftype vx_avg = 0.25 * (vel_x[jj * width + kk] +
                                    vel_x[jj * width + kk - 1] +
@@ -1013,7 +1037,7 @@ void compute_rhs_vtile(const ftype *restrict k_x,
                              vel_z[jj * width + kk - height * width] +
                              vel_z[(jj + 1) * width + kk - height * width]);
 
-            rhs_y_t[jj * VLEN + kk] -=
+            rhs_y_t[jj * VLEN + kk] -= 0.5 * (
                 vx_avg * (vel_y[jj * width + kk + 1] -
                           vel_y[jj * width + kk - 1]) / (2 * _DX) +
 
@@ -1022,8 +1046,25 @@ void compute_rhs_vtile(const ftype *restrict k_x,
                      vel_y[(jj - 1) * width + kk]) / (2 * _DX) +
 
                 vz_avg * (vel_y[jj * width + kk + height * width] -
-                          vel_y[jj * width + kk - height * width]) / (2 * _DX);
+                          vel_y[jj * width + kk - height * width]) / (2 * _DX) +
 
+
+                ((0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk + 1]) *
+                 (0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[(jj + 1) * width + kk]) -
+                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk - 1]) *
+                 (0.5 * vel_x[jj * width + kk - 1] + 0.5 * vel_x[(jj + 1) * width + kk - 1])) / _DX +
+
+                ((0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[(jj + 1) * width + kk]) *
+                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[(jj + 1) * width + kk]) -
+                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[(jj - 1) * width + kk]) *
+                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[(jj - 1) * width + kk])) / _DX +
+
+                ((0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk + height * width]) *
+                 (0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[(jj + 1) * width + kk]) -
+                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk - height * width]) *
+                 (0.5 * vel_z[jj * width + kk - height * width] +
+                  0.5 * vel_z[(jj + 1) * width + kk - height * width])) / _DX
+            );
 
             vx_avg = 0.25 * (vel_x[jj * width + kk] +
                              vel_x[jj * width + kk - 1] +
@@ -1035,7 +1076,7 @@ void compute_rhs_vtile(const ftype *restrict k_x,
                              vel_y[jj * width + kk + height * width] +
                              vel_y[(jj - 1) * width + kk + height * width]);
 
-            rhs_z_t[jj * VLEN + kk] -=
+            rhs_z_t[jj * VLEN + kk] -= 0.5 * (
                 vx_avg * (vel_z[jj * width + kk + 1] -
                           vel_z[jj * width + kk - 1]) / (2 * _DX) +
 
@@ -1044,7 +1085,23 @@ void compute_rhs_vtile(const ftype *restrict k_x,
 
                 vel_z[jj * width + kk] *
                     (vel_z[jj * width + kk + height * width] -
-                     vel_z[jj * width + kk - height * width]) / (2 * _DX);
+                     vel_z[jj * width + kk - height * width]) / (2 * _DX) +
+
+                ((0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[jj * width + kk + 1]) *
+                 (0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[jj * width + kk + height * width]) -
+                 (0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[jj * width + kk - 1]) *
+                 (0.5 * vel_x[jj * width + kk - 1] + 0.5 * vel_x[jj * width + kk - 1 + height * width])) / _DX +
+
+                ((0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[(jj + 1) * width + kk]) *
+                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk + height * width]) -
+                 (0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[(jj - 1) * width + kk]) *
+                 (0.5 * vel_y[(jj - 1) * width + kk] + 0.5 * vel_y[(jj - 1) * width + kk + height * width])) / _DX +
+
+                ((0.5 * vel_z[jj * width + kk + height * width] + 0.5 * vel_z[jj * width + kk]) *
+                 (0.5 * vel_z[jj * width + kk + height * width] + 0.5 * vel_z[jj * width + kk]) -
+                 (0.5 * vel_z[jj * width + kk - height * width] + 0.5 * vel_z[jj * width + kk]) *
+                 (0.5 * vel_z[jj * width + kk - height * width] + 0.5 * vel_z[jj * width + kk])) / _DX
+            );
         }
     }
 
