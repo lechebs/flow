@@ -5,7 +5,7 @@
 #include "alloc.h"
 #include "thread-array.h"
 
-void momentum_init(field_size size, field3 field);
+void momentum_init(field_size size, field3 field, Thread *thread);
 
 void momentum_solve(const_field porosity,
                     const_field gamma,

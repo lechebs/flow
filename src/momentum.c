@@ -1861,9 +1861,10 @@ static void solve_Dzz_blocks(const ftype *restrict w,
     }
 }
 
-void momentum_init(field_size size, field3 field)
+void momentum_init(field_size size, field3 field, Thread *thread)
 {
-    field3_fill(size, 0, field);
+    field3_fill_numalocal(size, 0, field, thread->t_id,
+    		    	  thread_get_array_size(thread));
 
     /* WARNING: Dummy initialization for lid-driven cavity. */
     for (uint32_t i = 0; i < size.depth; ++i) {
@@ -1888,12 +1889,12 @@ void momentum_solve(const_field porosity,
     ArenaAllocator *arena = thread_get_arena(thread);
     arena_enter(arena);
 
-    /* TODO: Check actual size needed when num_threads > 1. */
-    field_size tmp_size = { size.width, size.height, size.depth * 4 + 3 };
-    field tmp = field_alloc(tmp_size, arena);
-
     uint32_t t_id = thread->t_id;
     uint32_t num_threads = thread_get_array_size(thread);
+
+    /* TODO: Check actual size needed when num_threads > 1. */
+    field_size tmp_size = { size.width, size.height / num_threads, size.depth * 4 + 3 };
+    field tmp = field_alloc(tmp_size, arena);
 
     /*
     field3 rhs = field3_alloc(size, arena);

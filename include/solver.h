@@ -15,9 +15,9 @@ Solver *solver_alloc(uint32_t domain_depth,
                      uint32_t domain_width,
                      ArenaAllocator *arena);
 
-void solver_init(Solver *solver, ArenaAllocator *arena);
+void solver_init(Solver *solver, Thread *thread);
 
-void solver_set_porosity(Solver *solver, const ftype *src);
+void solver_set_porosity(Solver *solver, const ftype *src, Thread *thread);
 
 void solver_step(Solver *solver, uint32_t timestep, Thread *thread);
 

@@ -44,22 +44,25 @@ Solver *solver_alloc(uint32_t domain_depth,
     return solver;
 }
 
-void solver_init(Solver *solver, ArenaAllocator *arena)
+void solver_init(Solver *solver, Thread *thread)
 {
     field_size domain_size = solver->domain_size;
 
-    momentum_init(domain_size, solver->velocity_Dxx);
-    momentum_init(domain_size, solver->velocity_Dyy);
-    momentum_init(domain_size, solver->velocity_Dzz);
+    momentum_init(domain_size, solver->velocity_Dxx, thread);
+    momentum_init(domain_size, solver->velocity_Dyy, thread);
+    momentum_init(domain_size, solver->velocity_Dzz, thread);
 
-    pressure_init(domain_size, solver->pressure);
-    pressure_init(domain_size, solver->pressure_delta);
+    pressure_init(domain_size, solver->pressure, thread);
+    pressure_init(domain_size, solver->pressure_delta, thread);
 
+    ArenaAllocator *arena = thread_get_arena(thread);
     arena_enter(arena);
 
+    field_size subdomain_size = domain_size;
+    subdomain_size.depth /= thread_get_array_size(thread);
     /* Setting constant unit porosity. */
-    field tmp = field_alloc(domain_size, arena);
-    field_fill(domain_size, 1e20, tmp);
+    field tmp = field_alloc(subdomain_size, arena);
+    field_fill(subdomain_size, 1e20, tmp);
 
     /*
     for (uint32_t i = 0; i < domain_size.depth; ++i) {
@@ -79,15 +82,20 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
     }
     */
 
-    solver_set_porosity(solver, tmp);
+    solver_set_porosity(solver, tmp, thread);
+
+    thread_wait_on_barrier(thread);
 
     arena_exit(arena);
 }
 
-void solver_set_porosity(Solver *solver, const ftype *src)
+void solver_set_porosity(Solver *solver, const ftype *src, Thread *thread)
 {
-    field_copy(solver->domain_size, src, solver->porosity);
-    compute_gamma(src, solver->domain_size, solver->gamma);
+    uint32_t num_threads = thread_get_array_size(thread);
+    field_copy_numalocal(solver->domain_size, src, solver->porosity,
+		         thread->t_id, num_threads);
+    compute_gamma(src, solver->domain_size, solver->gamma,
+		  thread->t_id, num_threads);
 }
 
 void solver_step(Solver *solver, uint32_t timestep, Thread *thread)

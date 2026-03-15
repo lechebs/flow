@@ -81,6 +81,22 @@ static inline void field_fill(field_size size, ftype val, field field)
     const_fmemset(field, val, num_points);
 }
 
+static inline void field_fill_numalocal(field_size size,
+                                        ftype val,
+                                        field field,
+                                        uint32_t thread_id,
+                                        uint32_t num_threads)
+{
+    /* WARNING: Valid only when d=w=h. */
+    uint64_t num_points_per_thread = field_num_points(size) / num_threads;
+    uint64_t p_start = num_points_per_thread * thread_id;
+    uint64_t p_end = num_points_per_thread * (thread_id + 1);
+    /*const_fmemset(field, val, num_points);*/
+    for (uint64_t i = p_start; i < p_end; ++i) {
+        field[i] = val;
+    }
+}
+
 static inline void field_rand_fill(field_size size, field field)
 {
     uint64_t num_points = field_num_points(size);
@@ -94,6 +110,17 @@ static inline void field3_fill(field_size size, ftype val, field3 field)
     field_fill(size, val, field.z);
 }
 
+static inline void field3_fill_numalocal(field_size size,
+                                         ftype val,
+                                         field3 field,
+                                         uint32_t thread_id,
+                                         uint32_t num_threads)
+{
+    field_fill_numalocal(size, val, field.x, thread_id, num_threads);
+    field_fill_numalocal(size, val, field.y, thread_id, num_threads);
+    field_fill_numalocal(size, val, field.z, thread_id, num_threads);
+}
+
 static inline void field3_rand_fill(field_size size, field3 field)
 {
     field_rand_fill(size, field.x);
@@ -105,6 +132,18 @@ static inline void field_copy(field_size size, const_field src, field dst)
 {
     uint64_t alloc_size = field_num_points(size) * sizeof(ftype);
     memcpy(dst, src, alloc_size);
+}
+
+static inline void field_copy_numalocal(field_size size,
+				        const_field src_local,
+					field dst,
+                                        uint32_t thread_id,
+					uint32_t num_threads)
+{
+    /* WARNING: Assumes d=h=w. */
+    uint64_t num_points_per_thread = field_num_points(size) / num_threads;
+    uint64_t alloc_size = num_points_per_thread * sizeof(ftype);
+    memcpy(dst + num_points_per_thread * thread_id, src_local, alloc_size);
 }
 
 static inline void field3_copy(field_size size, const_field3 src, field3 dst)

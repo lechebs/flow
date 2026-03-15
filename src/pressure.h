@@ -5,7 +5,7 @@
 #include "alloc.h"
 #include "thread-array.h"
 
-void pressure_init(field_size size, field field);
+void pressure_init(field_size size, field field, Thread *thread);
 
 void pressure_solve(const_field3 velocity,
                     field_size size,

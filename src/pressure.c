@@ -715,9 +715,10 @@ void solve_pressure_fused(uint32_t depth,
 }
 #endif
 
-void pressure_init(field_size size, field field)
+void pressure_init(field_size size, field field, Thread *thread)
 {
-    field_fill(size, 0, field);
+    field_fill_numalocal(size, 0, field, thread->t_id,
+		         thread_get_array_size(thread));
 }
 
 void pressure_solve(const_field3 velocity,

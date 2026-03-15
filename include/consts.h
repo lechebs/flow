@@ -73,11 +73,16 @@ void _get_forcing(uint32_t __attribute__((unused)) x,  \
 
 static inline void compute_gamma(const_field porosity,
                                  field_size size,
-                                 field dst)
+                                 field dst,
+				 uint32_t thread_id,
+				 uint32_t num_threads)
 {
-    uint64_t num_points = field_num_points(size);
-    for (uint64_t i = 0; i < num_points; ++i) {
-        ftype k = porosity[i];
+    /* WARNING: Assumes d=h=w. */
+    uint64_t num_points_per_thread = field_num_points(size) / num_threads;
+    uint64_t p_start = num_points_per_thread * thread_id;
+    uint64_t p_end = num_points_per_thread * (thread_id + 1);
+    for (uint64_t i = p_start; i < p_end; ++i) {
+        ftype k = porosity[i - p_start];
         dst[i] = (k * _DT * _NU) / (2 * k + _DT * _NU) / (_DX * _DX);
     }
 }

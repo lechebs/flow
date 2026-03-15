@@ -70,14 +70,14 @@ void thread_array_run(ThreadArray *t_array,
                        threads + i);
 
         /* TODO: Figure out why pinning to cores performs weird. */
-        /*
         cpu_set_t cpu_affin_mask;
         CPU_ZERO(&cpu_affin_mask);
+	/* TODO: Better to group threads on the same numa nodes
+	 * based on the adjacency of the thread-local subdomains. */
         CPU_SET(i + 1, &cpu_affin_mask);
         pthread_setaffinity_np(threads[i].pt_id,
                                sizeof(cpu_set_t),
                                &cpu_affin_mask);
-        */
     }
 
     ArenaAllocator arena_part;
@@ -87,14 +87,12 @@ void thread_array_run(ThreadArray *t_array,
                         arena_part_size);
 
     /* TODO: Figure out why pinning to cores performs weird. */
-    /*
     cpu_set_t cpu_affin_mask;
     CPU_ZERO(&cpu_affin_mask);
     CPU_SET(0, &cpu_affin_mask);
     pthread_setaffinity_np(pthread_self(),
                            sizeof(cpu_set_t),
                            &cpu_affin_mask);
-    */
 
     Thread t = { 0, pthread_self(), t_array, &arena_part };
     func(&t);

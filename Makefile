@@ -10,7 +10,7 @@ VEC ?= EXPL
 
 DEFINE = -D$(FTYPE) -D$(VEC) -DTIMEITALL
 INCLUDE = -I$(INC_DIR) -I$(SRC_DIR)
-LIBS = -lm
+LIBS = -lm -lpthread
 
 SOLVER_OBJS = solver.o momentum.o pressure.o output.o thread-array.o
 UNIT_TEST_OBJS = unit-test.o momentum-test.o pressure-test.o
