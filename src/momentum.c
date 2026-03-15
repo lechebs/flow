@@ -886,6 +886,9 @@ void compute_rhs_vtile(const ftype *restrict porosity,
                        const ftype *restrict vel_x,
                        const ftype *restrict vel_y,
                        const ftype *restrict vel_z,
+                       const ftype *restrict vel_pred_x,
+                       const ftype *restrict vel_pred_y,
+                       const ftype *restrict vel_pred_z,
                        int is_last_face,
                        int is_last_row,
                        int is_last_col,
@@ -981,127 +984,125 @@ void compute_rhs_vtile(const ftype *restrict porosity,
     /* TODO: Figure out if the porosity jump is causing that
      * weird behaviour in the visualization. */
 
-    /* Naively computing the advective term of
-     * the skew-symmetric convective form. */
-
+    /* Naively computing the skew-symmetric convective form. */
 
     for (int jj = 0; jj < VLEN; ++jj) {
         for (int kk = 0; kk < VLEN; ++kk) {
 
             /* TODO: Handle borders using interpolation. */
 
-            ftype vy_avg = 0.25 * (vel_y[jj * width + kk] +
-                                   vel_y[jj * width + kk + 1] +
-                                   vel_y[(jj - 1) * width + kk] +
-                                   vel_y[(jj - 1) * width + kk + 1]);
+            ftype vy_avg = 0.25 * (vel_pred_y[jj * width + kk] +
+                                   vel_pred_y[jj * width + kk + 1] +
+                                   vel_pred_y[(jj - 1) * width + kk] +
+                                   vel_pred_y[(jj - 1) * width + kk + 1]);
 
-            ftype vz_avg = 0.25 * (vel_z[jj * width + kk] +
-                                   vel_z[jj * width + kk + 1] +
-                                   vel_z[jj * width + kk - height * width] +
-                                   vel_z[jj * width + kk - height * width + 1]);
+            ftype vz_avg = 0.25 * (vel_pred_z[jj * width + kk] +
+                                   vel_pred_z[jj * width + kk + 1] +
+                                   vel_pred_z[jj * width + kk - height * width] +
+                                   vel_pred_z[jj * width + kk - height * width + 1]);
 
             rhs_x_t[jj * VLEN + kk] -= 0.5 * (
-                vel_x[jj * width + kk] *
-                    (vel_x[jj * width + kk + 1] -
-                     vel_x[jj * width + kk - 1]) / (2 * _DX) +
+                vel_pred_x[jj * width + kk] *
+                    (vel_pred_x[jj * width + kk + 1] -
+                     vel_pred_x[jj * width + kk - 1]) / (2 * _DX) +
 
-                vy_avg * (vel_x[(jj + 1) * width + kk] -
-                          vel_x[(jj - 1) * width + kk]) / (2 * _DX) +
+                vy_avg * (vel_pred_x[(jj + 1) * width + kk] -
+                          vel_pred_x[(jj - 1) * width + kk]) / (2 * _DX) +
 
-                vz_avg * (vel_x[jj * width + kk + height * width] -
-                          vel_x[jj * width + kk - height * width]) / (2 * _DX) +
+                vz_avg * (vel_pred_x[jj * width + kk + height * width] -
+                          vel_pred_x[jj * width + kk - height * width]) / (2 * _DX) +
 
-                ((0.5 * vel_x[jj * width + kk + 1] + 0.5 * vel_x[jj * width + kk]) *
-                 (0.5 * vel_x[jj * width + kk + 1] + 0.5 * vel_x[jj * width + kk]) -
-                 (0.5 * vel_x[jj * width + kk - 1] + 0.5 * vel_x[jj * width + kk]) *
-                 (0.5 * vel_x[jj * width + kk - 1] + 0.5 * vel_x[jj * width + kk])) / _DX +
+                ((0.5 * vel_pred_x[jj * width + kk + 1] + 0.5 * vel_pred_x[jj * width + kk]) *
+                 (0.5 * vel_pred_x[jj * width + kk + 1] + 0.5 * vel_pred_x[jj * width + kk]) -
+                 (0.5 * vel_pred_x[jj * width + kk - 1] + 0.5 * vel_pred_x[jj * width + kk]) *
+                 (0.5 * vel_pred_x[jj * width + kk - 1] + 0.5 * vel_pred_x[jj * width + kk])) / _DX +
 
-                ((0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[(jj + 1) * width + kk]) *
-                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk + 1]) -
-                 (0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[(jj - 1) * width + kk]) *
-                 (0.5 * vel_y[(jj - 1) * width + kk] + 0.5 * vel_y[(jj - 1) * width + kk + 1])) / _DX +
+                ((0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[(jj + 1) * width + kk]) *
+                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk + 1]) -
+                 (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[(jj - 1) * width + kk]) *
+                 (0.5 * vel_pred_y[(jj - 1) * width + kk] + 0.5 * vel_pred_y[(jj - 1) * width + kk + 1])) / _DX +
 
-                ((0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[jj * width + kk + height * width]) *
-                 (0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[jj * width + kk + 1]) -
-                 (0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[jj * width + kk - height * width]) *
-                 (0.5 * vel_z[jj * width + kk - height * width] +
-                  0.5 * vel_z[jj * width + kk - height * width + 1])) / _DX
+                ((0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[jj * width + kk + height * width]) *
+                 (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[jj * width + kk + 1]) -
+                 (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[jj * width + kk - height * width]) *
+                 (0.5 * vel_pred_z[jj * width + kk - height * width] +
+                  0.5 * vel_pred_z[jj * width + kk - height * width + 1])) / _DX
             );
 
-            ftype vx_avg = 0.25 * (vel_x[jj * width + kk] +
-                                   vel_x[jj * width + kk - 1] +
-                                   vel_x[(jj + 1) * width + kk] +
-                                   vel_x[(jj + 1) * width + kk - 1]);
+            ftype vx_avg = 0.25 * (vel_pred_x[jj * width + kk] +
+                                   vel_pred_x[jj * width + kk - 1] +
+                                   vel_pred_x[(jj + 1) * width + kk] +
+                                   vel_pred_x[(jj + 1) * width + kk - 1]);
 
-            vz_avg = 0.25 * (vel_z[jj * width + kk] +
-                             vel_z[(jj + 1) * width + kk] +
-                             vel_z[jj * width + kk - height * width] +
-                             vel_z[(jj + 1) * width + kk - height * width]);
+            vz_avg = 0.25 * (vel_pred_z[jj * width + kk] +
+                             vel_pred_z[(jj + 1) * width + kk] +
+                             vel_pred_z[jj * width + kk - height * width] +
+                             vel_pred_z[(jj + 1) * width + kk - height * width]);
 
             rhs_y_t[jj * VLEN + kk] -= 0.5 * (
-                vx_avg * (vel_y[jj * width + kk + 1] -
-                          vel_y[jj * width + kk - 1]) / (2 * _DX) +
+                vx_avg * (vel_pred_y[jj * width + kk + 1] -
+                          vel_pred_y[jj * width + kk - 1]) / (2 * _DX) +
 
                 vel_y[jj * width + kk] *
-                    (vel_y[(jj + 1) * width + kk] -
-                     vel_y[(jj - 1) * width + kk]) / (2 * _DX) +
+                    (vel_pred_y[(jj + 1) * width + kk] -
+                     vel_pred_y[(jj - 1) * width + kk]) / (2 * _DX) +
 
-                vz_avg * (vel_y[jj * width + kk + height * width] -
-                          vel_y[jj * width + kk - height * width]) / (2 * _DX) +
+                vz_avg * (vel_pred_y[jj * width + kk + height * width] -
+                          vel_pred_y[jj * width + kk - height * width]) / (2 * _DX) +
 
 
-                ((0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk + 1]) *
-                 (0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[(jj + 1) * width + kk]) -
-                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk - 1]) *
-                 (0.5 * vel_x[jj * width + kk - 1] + 0.5 * vel_x[(jj + 1) * width + kk - 1])) / _DX +
+                ((0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk + 1]) *
+                 (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[(jj + 1) * width + kk]) -
+                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk - 1]) *
+                 (0.5 * vel_pred_x[jj * width + kk - 1] + 0.5 * vel_pred_x[(jj + 1) * width + kk - 1])) / _DX +
 
-                ((0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[(jj + 1) * width + kk]) *
-                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[(jj + 1) * width + kk]) -
-                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[(jj - 1) * width + kk]) *
-                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[(jj - 1) * width + kk])) / _DX +
+                ((0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[(jj + 1) * width + kk]) *
+                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[(jj + 1) * width + kk]) -
+                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[(jj - 1) * width + kk]) *
+                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[(jj - 1) * width + kk])) / _DX +
 
-                ((0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk + height * width]) *
-                 (0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[(jj + 1) * width + kk]) -
-                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk - height * width]) *
-                 (0.5 * vel_z[jj * width + kk - height * width] +
-                  0.5 * vel_z[(jj + 1) * width + kk - height * width])) / _DX
+                ((0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk + height * width]) *
+                 (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[(jj + 1) * width + kk]) -
+                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk - height * width]) *
+                 (0.5 * vel_pred_z[jj * width + kk - height * width] +
+                  0.5 * vel_pred_z[(jj + 1) * width + kk - height * width])) / _DX
             );
 
-            vx_avg = 0.25 * (vel_x[jj * width + kk] +
-                             vel_x[jj * width + kk - 1] +
-                             vel_x[jj * width + kk + height * width] +
-                             vel_x[jj * width + kk + height * width - 1]);
+            vx_avg = 0.25 * (vel_pred_x[jj * width + kk] +
+                             vel_pred_x[jj * width + kk - 1] +
+                             vel_pred_x[jj * width + kk + height * width] +
+                             vel_pred_x[jj * width + kk + height * width - 1]);
 
-            vy_avg = 0.25 * (vel_y[jj * width + kk] +
-                             vel_y[(jj - 1) * width + kk] +
-                             vel_y[jj * width + kk + height * width] +
-                             vel_y[(jj - 1) * width + kk + height * width]);
+            vy_avg = 0.25 * (vel_pred_y[jj * width + kk] +
+                             vel_pred_y[(jj - 1) * width + kk] +
+                             vel_pred_y[jj * width + kk + height * width] +
+                             vel_pred_y[(jj - 1) * width + kk + height * width]);
 
             rhs_z_t[jj * VLEN + kk] -= 0.5 * (
-                vx_avg * (vel_z[jj * width + kk + 1] -
-                          vel_z[jj * width + kk - 1]) / (2 * _DX) +
+                vx_avg * (vel_pred_z[jj * width + kk + 1] -
+                          vel_pred_z[jj * width + kk - 1]) / (2 * _DX) +
 
-                vy_avg * (vel_z[(jj + 1) * width + kk] -
-                          vel_z[(jj - 1) * width + kk]) / (2 * _DX) +
+                vy_avg * (vel_pred_z[(jj + 1) * width + kk] -
+                          vel_pred_z[(jj - 1) * width + kk]) / (2 * _DX) +
 
                 vel_z[jj * width + kk] *
-                    (vel_z[jj * width + kk + height * width] -
-                     vel_z[jj * width + kk - height * width]) / (2 * _DX) +
+                    (vel_pred_z[jj * width + kk + height * width] -
+                     vel_pred_z[jj * width + kk - height * width]) / (2 * _DX) +
 
-                ((0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[jj * width + kk + 1]) *
-                 (0.5 * vel_x[jj * width + kk] + 0.5 * vel_x[jj * width + kk + height * width]) -
-                 (0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[jj * width + kk - 1]) *
-                 (0.5 * vel_x[jj * width + kk - 1] + 0.5 * vel_x[jj * width + kk - 1 + height * width])) / _DX +
+                ((0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[jj * width + kk + 1]) *
+                 (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[jj * width + kk + height * width]) -
+                 (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[jj * width + kk - 1]) *
+                 (0.5 * vel_pred_x[jj * width + kk - 1] + 0.5 * vel_pred_x[jj * width + kk - 1 + height * width])) / _DX +
 
-                ((0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[(jj + 1) * width + kk]) *
-                 (0.5 * vel_y[jj * width + kk] + 0.5 * vel_y[jj * width + kk + height * width]) -
-                 (0.5 * vel_z[jj * width + kk] + 0.5 * vel_z[(jj - 1) * width + kk]) *
-                 (0.5 * vel_y[(jj - 1) * width + kk] + 0.5 * vel_y[(jj - 1) * width + kk + height * width])) / _DX +
+                ((0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[(jj + 1) * width + kk]) *
+                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk + height * width]) -
+                 (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[(jj - 1) * width + kk]) *
+                 (0.5 * vel_pred_y[(jj - 1) * width + kk] + 0.5 * vel_pred_y[(jj - 1) * width + kk + height * width])) / _DX +
 
-                ((0.5 * vel_z[jj * width + kk + height * width] + 0.5 * vel_z[jj * width + kk]) *
-                 (0.5 * vel_z[jj * width + kk + height * width] + 0.5 * vel_z[jj * width + kk]) -
-                 (0.5 * vel_z[jj * width + kk - height * width] + 0.5 * vel_z[jj * width + kk]) *
-                 (0.5 * vel_z[jj * width + kk - height * width] + 0.5 * vel_z[jj * width + kk])) / _DX
+                ((0.5 * vel_pred_z[jj * width + kk + height * width] + 0.5 * vel_pred_z[jj * width + kk]) *
+                 (0.5 * vel_pred_z[jj * width + kk + height * width] + 0.5 * vel_pred_z[jj * width + kk]) -
+                 (0.5 * vel_pred_z[jj * width + kk - height * width] + 0.5 * vel_pred_z[jj * width + kk]) *
+                 (0.5 * vel_pred_z[jj * width + kk - height * width] + 0.5 * vel_pred_z[jj * width + kk])) / _DX
             );
         }
     }
@@ -1157,6 +1158,9 @@ void solve_vtile_row(const ftype *restrict porosity,
                      const ftype *restrict vel_x,
                      const ftype *restrict vel_y,
                      const ftype *restrict vel_z,
+                     const ftype *restrict vel_pred_x,
+                     const ftype *restrict vel_pred_y,
+                     const ftype *restrict vel_pred_z,
                      uint32_t i,
                      uint32_t j,
                      uint32_t depth,
@@ -1182,6 +1186,7 @@ void solve_vtile_row(const ftype *restrict porosity,
 
     compute_rhs_vtile(porosity, p, phi, eta_x, eta_y, eta_z,
                       zeta_x, zeta_y, zeta_z, vel_x, vel_y, vel_z,
+                      vel_pred_x, vel_pred_y, vel_pred_z,
                       is_last_face, is_last_row, INNER_COL,
                       i, j, 0, depth, height, width, timestep,
                       f_x_t, f_y_t, f_z_t);
@@ -1210,6 +1215,7 @@ void solve_vtile_row(const ftype *restrict porosity,
                           eta_x + tk, eta_y + tk, eta_z + tk,
                           zeta_x + tk, zeta_y + tk, zeta_z + tk,
                           vel_x + tk, vel_y + tk, vel_z + tk,
+                          vel_pred_x + tk, vel_pred_y + tk, vel_pred_z + tk,
                           is_last_face, is_last_row, INNER_COL,
                           i, j, tk, depth, height, width, timestep,
                           f_x_t, f_y_t, f_z_t);
@@ -1240,6 +1246,9 @@ void solve_vtile_row(const ftype *restrict porosity,
                       vel_x + width - VLEN,
                       vel_y + width - VLEN,
                       vel_z + width - VLEN,
+                      vel_pred_x + width - VLEN,
+                      vel_pred_y + width - VLEN,
+                      vel_pred_z + width - VLEN,
                       is_last_face, is_last_row, LAST_COL,
                       i, j, width - VLEN, depth, height, width, timestep,
                       f_x_t, f_y_t, f_z_t);
@@ -1331,6 +1340,9 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                                        const ftype *restrict vel_x,
                                        const ftype *restrict vel_y,
                                        const ftype *restrict vel_z,
+                                       const ftype *restrict vel_pred_x,
+                                       const ftype *restrict vel_pred_y,
+                                       const ftype *restrict vel_pred_z,
                                        uint32_t depth,
                                        uint32_t height,
                                        uint32_t width,
@@ -1360,6 +1372,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
+                            vel_pred_x + off, vel_pred_y + off,
+                            vel_pred_z + off,
                             i, j, depth, height, width, timestep,
                             INNER_FACE, INNER_ROW, tmp);
         }
@@ -1369,6 +1383,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
+                        vel_pred_x + off, vel_pred_y + off,
+                        vel_pred_z + off,
                         i, height - VLEN, depth, height, width, timestep,
                         INNER_FACE, LAST_ROW, tmp);
     }
@@ -1385,6 +1401,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
+                            vel_pred_x + off, vel_pred_y + off,
+                            vel_pred_z + off,
                             depth - 1, j, depth, height, width, timestep,
                             LAST_FACE, INNER_ROW, tmp);
         }
@@ -1393,6 +1411,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
+                        vel_pred_x + off, vel_pred_y + off,
+                        vel_pred_z + off,
                         depth - 1, height - VLEN, depth, height, width, timestep,
                         LAST_FACE, LAST_ROW, tmp);
 
@@ -1405,6 +1425,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
+                            vel_pred_x + off, vel_pred_y + off,
+                            vel_pred_z + off,
                             depth - (t_id + 1), j,
                             depth, height, width, timestep,
                             INNER_FACE, INNER_ROW, tmp);
@@ -1416,6 +1438,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
+                        vel_pred_x + off, vel_pred_y + off,
+                        vel_pred_z + off,
                         depth - (t_id + 1), height - VLEN,
                         depth, height, width, timestep,
                         INNER_FACE, LAST_ROW, tmp);
@@ -1859,7 +1883,10 @@ void apply_back_bc(const ftype *restrict w,
                    ftype *restrict tmp_u_z,
                    ftype *restrict u_x,
                    ftype *restrict u_y,
-                   ftype *restrict u_z)
+                   ftype *restrict u_z,
+                   ftype *restrict u_x_pred,
+                   ftype *restrict u_y_pred,
+                   ftype *restrict u_z_pred)
 {
     vftype un_x, un_y, un_z;
     _get_back_bc_u_delta(x, y, z, t, &un_x, &un_y, &un_z);
@@ -1872,10 +1899,73 @@ void apply_back_bc(const ftype *restrict w,
     vstore(tmp_u_y, _un_y);
     vstore(tmp_u_z, _un_z);
 
-    vstore(u_x, vadd(vload(u_x), _un_x));
-    vstore(u_y, vadd(vload(u_y), _un_y));
-    vstore(u_z, vadd(vload(u_z), _un_z));
+    vftype u_x_old = vload(u_x);
+    vftype u_y_old = vload(u_y);
+    vftype u_z_old = vload(u_z);
 
+    vftype u_x_new = vadd(u_x_old, _un_x);
+    vftype u_y_new = vadd(u_y_old, _un_y);
+    vftype u_z_new = vadd(u_z_old, _un_z);
+
+    vstore(u_x, u_x_new);
+    vstore(u_y, u_y_new);
+    vstore(u_z, u_z_new);
+
+    vstore(u_x_pred, (3 * u_x_new - u_x_old) / 2);
+    vstore(u_y_pred, (3 * u_y_new - u_y_old) / 2);
+    vstore(u_z_pred, (3 * u_z_new - u_z_old) / 2);
+}
+
+static inline __attribute__((always_inline))
+void backward_sub_row_pred_vel(const ftype *restrict f_x,
+                               const ftype *restrict f_y,
+                               const ftype *restrict f_z,
+                               const ftype *restrict upper,
+                               uint32_t width,
+                               ftype *restrict tmp_u_x,
+                               ftype *restrict tmp_u_y,
+                               ftype *restrict tmp_u_z,
+                               ftype *restrict u_x,
+                               ftype *restrict u_y,
+                               ftype *restrict u_z,
+                               ftype *restrict u_x_pred,
+                               ftype *restrict u_y_pred,
+                               ftype *restrict u_z_pred)
+{
+    for (int k = 0; k < width; k += VLEN) {
+        vftype fs_x = vload(f_x + k);
+        vftype fs_y = vload(f_y + k);
+        vftype fs_z = vload(f_z + k);
+        vftype uppers = vload(upper + k);
+
+        vftype u_x_prevs = vload(tmp_u_x + k);
+        vftype u_y_prevs = vload(tmp_u_y + k);
+        vftype u_z_prevs = vload(tmp_u_z + k);
+
+        vftype us_x = vfmadd(vneg(uppers), u_x_prevs, fs_x);
+        vftype us_y = vfmadd(vneg(uppers), u_y_prevs, fs_y);
+        vftype us_z = vfmadd(vneg(uppers), u_z_prevs, fs_z);
+
+        vstore(tmp_u_x + k, us_x);
+        vstore(tmp_u_y + k, us_y);
+        vstore(tmp_u_z + k, us_z);
+
+        vftype u_x_old = vload(u_x + k);
+        vftype u_y_old = vload(u_y + k);
+        vftype u_z_old = vload(u_z + k);
+
+        vftype u_x_new = vadd(u_x_old, us_x);
+        vftype u_y_new = vadd(u_y_old, us_y);
+        vftype u_z_new = vadd(u_z_old, us_z);
+
+        vstore(u_x + k, u_x_new);
+        vstore(u_y + k, u_y_new);
+        vstore(u_z + k, u_z_new);
+
+        vstore(u_x_pred + k, (3 * u_x_new - u_x_old) / 2);
+        vstore(u_y_pred + k, (3 * u_y_new - u_y_old) / 2);
+        vstore(u_z_pred + k, (3 * u_z_new - u_z_old) / 2);
+    }
 }
 
 /* Solves the block diagonal system (I - wDzz)(u_n+1 - u_n) = f - u_n. */
@@ -1891,6 +1981,9 @@ static void solve_Dzz_blocks(const ftype *restrict w,
                              ftype *restrict u_x,
                              ftype *restrict u_y,
                              ftype *restrict u_z,
+                             ftype *restrict u_x_pred,
+                             ftype *restrict u_y_pred,
+                             ftype *restrict u_z_pred,
                              uint32_t t_id,
                              uint32_t num_threads)
 {
@@ -1967,6 +2060,7 @@ static void solve_Dzz_blocks(const ftype *restrict w,
                                  tmp_f_z + tmp_row_offset);
             }
         }
+
         /* Apply BCs the last face, solving directly. */
         uint64_t face_offset = height * width * (depth - 1);
         for (uint32_t j = row_start; j < row_end; ++j) {
@@ -1985,7 +2079,10 @@ static void solve_Dzz_blocks(const ftype *restrict w,
                               tmp_u_z + width * (j - row_start) + k,
                               u_x + face_offset + width * j + k,
                               u_y + face_offset + width * j + k,
-                              u_z + face_offset + width * j + k);
+                              u_z + face_offset + width * j + k,
+                              u_x_pred + face_offset + width * j + k,
+                              u_y_pred + face_offset + width * j + k,
+                              u_z_pred + face_offset + width * j + k);
             }
         }
 
@@ -1995,19 +2092,22 @@ static void solve_Dzz_blocks(const ftype *restrict w,
                 uint64_t row_offset = height * width * (depth - i - 1) +
                                                width * j;
                 uint64_t tmp_row_offset = sub_block_height * width *
-                                          (depth - i - 1) + width *
-                                          (j - row_start);
-                backward_sub_row(tmp_f_x + tmp_row_offset, 
-                                 tmp_f_y + tmp_row_offset,
-                                 tmp_f_z + tmp_row_offset, 
-                                 tmp + tmp_row_offset,
-                                 width,
-                                 tmp_u_x + width * (j - row_start),
-                                 tmp_u_y + width * (j - row_start),
-                                 tmp_u_z + width * (j - row_start),
-                                 u_x + row_offset,
-                                 u_y + row_offset,
-                                 u_z + row_offset);
+                                          (depth - i - 1) +
+                                          width * (j - row_start);
+                backward_sub_row_pred_vel(tmp_f_x + tmp_row_offset,
+                                          tmp_f_y + tmp_row_offset,
+                                          tmp_f_z + tmp_row_offset,
+                                          tmp + tmp_row_offset,
+                                          width,
+                                          tmp_u_x + width * (j - row_start),
+                                          tmp_u_y + width * (j - row_start),
+                                          tmp_u_z + width * (j - row_start),
+                                          u_x + row_offset,
+                                          u_y + row_offset,
+                                          u_z + row_offset,
+                                          u_x_pred + row_offset,
+                                          u_y_pred + row_offset,
+                                          u_z_pred + row_offset);
             }
         }
     }
@@ -2036,6 +2136,7 @@ void momentum_solve(const_field porosity,
                     field3 velocity_Dxx,
                     field3 velocity_Dyy,
                     field3 velocity_Dzz,
+                    field3 velocity_pred,
                     uint32_t timestep,
                     Thread *thread)
 {
@@ -2076,6 +2177,7 @@ void momentum_solve(const_field porosity,
         velocity_Dxx.x, velocity_Dxx.y, velocity_Dxx.z,
         velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
         velocity_Dzz.x, velocity_Dzz.y, velocity_Dzz.z,
+        velocity_pred.x, velocity_pred.y, velocity_pred.z,
         size.depth, size.height, size.width, timestep, tmp,
         t_id, num_threads);
 
@@ -2099,6 +2201,7 @@ void momentum_solve(const_field porosity,
         gamma, size.depth, size.height, size.width, timestep,
         tmp, velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
         velocity_Dzz.x, velocity_Dzz.y, velocity_Dzz.z,
+        velocity_pred.x, velocity_pred.y, velocity_pred.z,
         t_id, num_threads);
 
     thread_wait_on_barrier(thread);
