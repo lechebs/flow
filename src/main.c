@@ -89,7 +89,7 @@ int main(void)
     field_size size = { WIDTH, HEIGHT, DEPTH };
     OutputVTK *output = output_vtk_create(size, _DX, &arena);
 
-    output_vtk_attach_field(output, solver_get_porosity(solver),
+    output_vtk_attach_field(output, solver_get_porosity(solver).x,
                             "porosity", &arena);
     output_vtk_attach_field(output, solver_get_pressure(solver),
                             "pressure", &arena);

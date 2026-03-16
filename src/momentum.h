@@ -14,6 +14,7 @@ void momentum_solve(const_field3 porosity,
                     field3 velocity_Dxx,
                     field3 velocity_Dyy,
                     field3 velocity_Dzz,
+                    field3 velocity_Dzz_pred,
                     uint32_t timestep,
                     Thread *thread);
 
