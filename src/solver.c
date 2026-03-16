@@ -16,6 +16,7 @@ struct Solver {
     field3 velocity_Dxx;
     field3 velocity_Dyy;
     field3 velocity_Dzz;
+    field3 velocity_pred;
 };
 
 Solver *solver_alloc(uint32_t domain_depth,
@@ -40,6 +41,7 @@ Solver *solver_alloc(uint32_t domain_depth,
     solver->velocity_Dxx = field3_alloc_pad(domain_size, arena);
     solver->velocity_Dyy = field3_alloc_pad(domain_size, arena);
     solver->velocity_Dzz = field3_alloc_pad(domain_size, arena);
+    solver->velocity_pred = field3_alloc_pad(domain_size, arena);
 
     return solver;
 }
@@ -51,6 +53,7 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
     momentum_init(domain_size, solver->velocity_Dxx);
     momentum_init(domain_size, solver->velocity_Dyy);
     momentum_init(domain_size, solver->velocity_Dzz);
+    momentum_init(domain_size, solver->velocity_pred);
 
     pressure_init(domain_size, solver->pressure);
     pressure_init(domain_size, solver->pressure_delta);
@@ -61,12 +64,22 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
     field tmp = field_alloc(domain_size, arena);
     field_fill(domain_size, 1e20, tmp);
 
-    /*
     for (uint32_t i = 0; i < domain_size.depth; ++i) {
         for (uint32_t j = 0; j < domain_size.height; ++j) {
             for (uint32_t k = 0; k < domain_size.width; ++k) {
                 uint64_t idx = field_idx(domain_size, k, j, i);
 
+                /*
+                uint64_t dist = (i - 32) * (i - 32) +
+                                (j - 32) * (j - 32) +
+                                (k - 32) * (k - 32);
+
+                if (dist < 64) {
+                    tmp[idx] = 1e-5;// * (64.0 - dist) / 64.0;
+                }
+                */
+
+                /*
                 if (((i < 48 && i > 16) && (j > 16 && j < 26)) ||
                     ((i > 16) && (j > 46 && j < 56) && (k < 32)) ||
                     ((i < 48) && (j > 76 && j < 86) && (k > 32)) ||
@@ -74,10 +87,18 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
                 ) {
                     tmp[idx] = 1e-20;
                 }
+                */
+
+                /*
+                if (i > 16 && i < 48 &&
+                    j > 16 && j < 48 &&
+                    k > 16 && k < 48) {
+                    tmp[idx] = 1e-10;
+                }
+                */
             }
         }
     }
-    */
 
     solver_set_porosity(solver, tmp);
 
@@ -100,6 +121,7 @@ void solver_step(Solver *solver, uint32_t timestep, Thread *thread)
                    solver->velocity_Dxx,
                    solver->velocity_Dyy,
                    solver->velocity_Dzz,
+                   solver->velocity_pred,
                    timestep,
                    thread);
 

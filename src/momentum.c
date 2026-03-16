@@ -1001,16 +1001,49 @@ void compute_rhs_vtile(const ftype *restrict porosity,
                                    vel_pred_z[jj * width + kk - height * width] +
                                    vel_pred_z[jj * width + kk - height * width + 1]);
 
+            ftype vx_dy;
+            if (is_last_row && jj == VLEN - 1) {
+                vftype vx, vx_old, _y, _z;
+                _get_bottom_bc_u(k + kk, j + jj, i, timestep, &vx, &_y, &_z);
+                _get_bottom_bc_u(k + kk, j + jj, i, timestep - 1, &vx_old, &_y, &_z);
+                ftype tmp[VLEN], tmp_old[VLEN];
+                vstore(tmp, vx);
+                vstore(tmp_old, vx_old);
+
+                vx_dy = (0.5 * (tmp[kk] + tmp_old[kk]) -
+                         0.5 * (vel_pred_x[jj * width + kk] +
+                                vel_pred_x[(jj - 1) * width + kk])) / _DX;
+
+            } else {
+                vx_dy = (vel_pred_x[(jj + 1) * width + kk] -
+                         vel_pred_x[(jj - 1) * width + kk]) / (2 * _DX);
+            }
+
+            ftype vx_dz;
+            if (is_last_face && i == depth - 1) {
+                vftype vx, vx_old, _y, _z;
+                _get_back_bc_u(k + kk, j + jj, i, timestep, &vx, &_y, &_z);
+                _get_back_bc_u(k + kk, j + jj, i, timestep - 1, &vx_old, &_y, &_z);
+                ftype tmp[VLEN], tmp_old[VLEN];
+                vstore(tmp, vx);
+                vstore(tmp_old, vx_old);
+
+                vx_dz = (0.5 * (tmp[kk] + tmp_old[kk]) -
+                         0.5 * (vel_pred_x[jj * width + kk] +
+                                vel_pred_x[jj * width - height * width])) / _DX;
+            } else {
+                vx_dz = (vel_pred_x[jj * width + kk + height * width] -
+                         vel_pred_x[jj * width + kk - height * width]) / (2 * _DX);
+            }
+
             rhs_x_t[jj * VLEN + kk] -= 0.5 * (
                 vel_pred_x[jj * width + kk] *
                     (vel_pred_x[jj * width + kk + 1] -
                      vel_pred_x[jj * width + kk - 1]) / (2 * _DX) +
 
-                vy_avg * (vel_pred_x[(jj + 1) * width + kk] -
-                          vel_pred_x[(jj - 1) * width + kk]) / (2 * _DX) +
+                vy_avg * vx_dy +
 
-                vz_avg * (vel_pred_x[jj * width + kk + height * width] -
-                          vel_pred_x[jj * width + kk - height * width]) / (2 * _DX) +
+                vz_avg * vx_dz +
 
                 ((0.5 * vel_pred_x[jj * width + kk + 1] + 0.5 * vel_pred_x[jj * width + kk]) *
                  (0.5 * vel_pred_x[jj * width + kk + 1] + 0.5 * vel_pred_x[jj * width + kk]) -
@@ -1039,17 +1072,48 @@ void compute_rhs_vtile(const ftype *restrict porosity,
                              vel_pred_z[jj * width + kk - height * width] +
                              vel_pred_z[(jj + 1) * width + kk - height * width]);
 
+            ftype vy_dx;
+            if (is_last_col && kk == VLEN - 1) {
+                vftype vy, vy_old, _x, _z;
+                _get_right_bc_u(k + kk, j + jj, i, timestep, &_x, &vy, &_z);
+                _get_right_bc_u(k + kk, j + jj, i, timestep - 1, &_x, &vy_old, &_z);
+                ftype tmp[VLEN], tmp_old[VLEN];
+                vstore(tmp, vy);
+                vstore(tmp_old, vy_old);
+
+                vy_dx = (0.5 * (tmp[jj] + tmp_old[jj]) -
+                         0.5 * (vel_pred_y[jj * width + kk] +
+                                vel_pred_y[jj * width + kk - 1])) / _DX;
+            } else {
+                vy_dx = (vel_pred_y[jj * width + kk + 1] -
+                         vel_pred_y[jj * width + kk - 1]) / (2 * _DX);
+            }
+
+            ftype vy_dz;
+            if (is_last_face && i == depth - 1) {
+                vftype vy, vy_old, _x, _z;
+                _get_back_bc_u(k + kk, j + jj, i, timestep, &_x, &vy, &_z);
+                _get_back_bc_u(k + kk, j + jj, i, timestep - 1, &_x, &vy_old, &_z);
+                ftype tmp[VLEN], tmp_old[VLEN];
+                vstore(tmp, vy);
+                vstore(tmp_old, vy_old);
+
+                vy_dz = (0.5 * (tmp[jj] + tmp_old[jj]) -
+                         0.5 * (vel_pred_y[jj * width + kk] +
+                                vel_pred_y[jj * width + kk - height * width])) / _DX;
+            } else {
+                vy_dz = (vel_pred_y[jj * width + kk + height * width] -
+                         vel_pred_y[jj * width + kk - height * width]) / (2 * _DX);
+            }
+
             rhs_y_t[jj * VLEN + kk] -= 0.5 * (
-                vx_avg * (vel_pred_y[jj * width + kk + 1] -
-                          vel_pred_y[jj * width + kk - 1]) / (2 * _DX) +
+                vx_avg * vy_dx +
 
                 vel_y[jj * width + kk] *
                     (vel_pred_y[(jj + 1) * width + kk] -
                      vel_pred_y[(jj - 1) * width + kk]) / (2 * _DX) +
 
-                vz_avg * (vel_pred_y[jj * width + kk + height * width] -
-                          vel_pred_y[jj * width + kk - height * width]) / (2 * _DX) +
-
+                vz_avg * vy_dz +
 
                 ((0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk + 1]) *
                  (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[(jj + 1) * width + kk]) -
@@ -1078,12 +1142,44 @@ void compute_rhs_vtile(const ftype *restrict porosity,
                              vel_pred_y[jj * width + kk + height * width] +
                              vel_pred_y[(jj - 1) * width + kk + height * width]);
 
-            rhs_z_t[jj * VLEN + kk] -= 0.5 * (
-                vx_avg * (vel_pred_z[jj * width + kk + 1] -
-                          vel_pred_z[jj * width + kk - 1]) / (2 * _DX) +
+            ftype vz_dx;
+            if (is_last_col && kk == VLEN - 1) {
+                vftype vz, vz_old, _x, _y;
+                _get_right_bc_u(k + kk, j + jj, i, timestep, &_x, &_y, &vz);
+                _get_right_bc_u(k + kk, j + jj, i, timestep - 1, &_x, &_y, &vz_old);
+                ftype tmp[VLEN], tmp_old[VLEN];
+                vstore(tmp, vz);
+                vstore(tmp_old, vz_old);
 
-                vy_avg * (vel_pred_z[(jj + 1) * width + kk] -
-                          vel_pred_z[(jj - 1) * width + kk]) / (2 * _DX) +
+                vz_dx = (0.5 * (tmp[jj] + tmp_old[jj]) -
+                         0.5 * (vel_pred_z[jj * width + kk] +
+                                vel_pred_z[jj * width + kk - 1])) / _DX;
+            } else {
+                vz_dx = (vel_pred_z[jj * width + kk + 1] -
+                         vel_pred_z[jj * width + kk - 1]) / (2 * _DX);
+            }
+
+            ftype vz_dy;
+            if (is_last_row && jj == VLEN - 1) {
+                vftype vz, vz_old, _x, _y;
+                _get_bottom_bc_u(k + kk, j + jj, i, timestep, &_x, &_y, &vz);
+                _get_bottom_bc_u(k + kk, j + jj, i, timestep - 1, &_x, &_y, &vz_old);
+                ftype tmp[VLEN], tmp_old[VLEN];
+                vstore(tmp, vz);
+                vstore(tmp_old, vz_old);
+
+                vz_dy = (0.5 * (tmp[kk] + tmp_old[kk]) -
+                         0.5 * (vel_pred_z[jj * width + kk] +
+                                vel_pred_z[(jj - 1) * width + kk])) / _DX;
+            } else {
+                vz_dy = (vel_pred_z[(jj + 1) * width + kk] -
+                         vel_pred_z[(jj - 1) * width + kk]) / (2 * _DX);
+            }
+
+            rhs_z_t[jj * VLEN + kk] -= 0.5 * (
+                vx_avg * vz_dx +
+
+                vy_avg * vz_dy +
 
                 vel_z[jj * width + kk] *
                     (vel_pred_z[jj * width + kk + height * width] -
