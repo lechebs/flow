@@ -1,0 +1,160 @@
+solve_momentum_Dxx_blocks_fused_rhs       653.76 ms
+solve_momentum_Dyy_blocks                 244.45 ms
+solve_momentum_Dzz_blocks                 287.67 ms
+solve_pressure_Dxx_blocks                  74.16 ms
+solve_pressure_Dyy_blocks                  35.68 ms
+solve_pressure_Dzz_blocks                  76.18 ms
+solver_step_aggregate                    1372.71 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       674.29 ms
+solve_momentum_Dyy_blocks                 246.28 ms
+solve_momentum_Dzz_blocks                 258.39 ms
+solve_pressure_Dxx_blocks                  76.57 ms
+solve_pressure_Dyy_blocks                  35.64 ms
+solve_pressure_Dzz_blocks                  76.11 ms
+solver_step_aggregate                    1367.32 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       682.03 ms
+solve_momentum_Dyy_blocks                 246.54 ms
+solve_momentum_Dzz_blocks                 258.38 ms
+solve_pressure_Dxx_blocks                  74.36 ms
+solve_pressure_Dyy_blocks                  35.61 ms
+solve_pressure_Dzz_blocks                  76.19 ms
+solver_step_aggregate                    1373.16 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       679.63 ms
+solve_momentum_Dyy_blocks                 246.29 ms
+solve_momentum_Dzz_blocks                 258.43 ms
+solve_pressure_Dxx_blocks                  76.63 ms
+solve_pressure_Dyy_blocks                  35.69 ms
+solve_pressure_Dzz_blocks                  76.17 ms
+solver_step_aggregate                    1372.87 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       680.94 ms
+solve_momentum_Dyy_blocks                 245.04 ms
+solve_momentum_Dzz_blocks                 257.33 ms
+solve_pressure_Dxx_blocks                  73.86 ms
+solve_pressure_Dyy_blocks                  35.72 ms
+solve_pressure_Dzz_blocks                  76.16 ms
+solver_step_aggregate                    1369.08 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       677.79 ms
+solve_momentum_Dyy_blocks                 244.97 ms
+solve_momentum_Dzz_blocks                 257.23 ms
+solve_pressure_Dxx_blocks                  76.17 ms
+solve_pressure_Dyy_blocks                  35.55 ms
+solve_pressure_Dzz_blocks                  76.14 ms
+solver_step_aggregate                    1367.90 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       678.91 ms
+solve_momentum_Dyy_blocks                 245.29 ms
+solve_momentum_Dzz_blocks                 257.15 ms
+solve_pressure_Dxx_blocks                  78.23 ms
+solve_pressure_Dyy_blocks                  35.62 ms
+solve_pressure_Dzz_blocks                  75.99 ms
+solver_step_aggregate                    1371.24 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       682.63 ms
+solve_momentum_Dyy_blocks                 245.01 ms
+solve_momentum_Dzz_blocks                 257.03 ms
+solve_pressure_Dxx_blocks                  74.30 ms
+solve_pressure_Dyy_blocks                  38.14 ms
+solve_pressure_Dzz_blocks                  75.96 ms
+solver_step_aggregate                    1373.14 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       686.01 ms
+solve_momentum_Dyy_blocks                 248.84 ms
+solve_momentum_Dzz_blocks                 262.49 ms
+solve_pressure_Dxx_blocks                  74.68 ms
+solve_pressure_Dyy_blocks                  39.10 ms
+solve_pressure_Dzz_blocks                  76.30 ms
+solver_step_aggregate                    1387.73 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       695.81 ms
+solve_momentum_Dyy_blocks                 250.73 ms
+solve_momentum_Dzz_blocks                 261.46 ms
+solve_pressure_Dxx_blocks                  75.22 ms
+solve_pressure_Dyy_blocks                  35.76 ms
+solve_pressure_Dzz_blocks                  76.06 ms
+solver_step_aggregate                    1395.09 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       701.28 ms
+solve_momentum_Dyy_blocks                 250.72 ms
+solve_momentum_Dzz_blocks                 260.32 ms
+solve_pressure_Dxx_blocks                  75.25 ms
+solve_pressure_Dyy_blocks                  35.66 ms
+solve_pressure_Dzz_blocks                  76.01 ms
+solver_step_aggregate                    1399.29 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       703.90 ms
+solve_momentum_Dyy_blocks                 250.56 ms
+solve_momentum_Dzz_blocks                 260.30 ms
+solve_pressure_Dxx_blocks                  75.73 ms
+solve_pressure_Dyy_blocks                  35.59 ms
+solve_pressure_Dzz_blocks                  75.91 ms
+solver_step_aggregate                    1402.04 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       686.86 ms
+solve_momentum_Dyy_blocks                 248.26 ms
+solve_momentum_Dzz_blocks                 259.76 ms
+solve_pressure_Dxx_blocks                  76.87 ms
+solve_pressure_Dyy_blocks                  35.55 ms
+solve_pressure_Dzz_blocks                  76.06 ms
+solver_step_aggregate                    1383.40 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       682.84 ms
+solve_momentum_Dyy_blocks                 248.24 ms
+solve_momentum_Dzz_blocks                 260.66 ms
+solve_pressure_Dxx_blocks                  77.25 ms
+solve_pressure_Dyy_blocks                  35.59 ms
+solve_pressure_Dzz_blocks                  76.09 ms
+solver_step_aggregate                    1380.71 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       678.52 ms
+solve_momentum_Dyy_blocks                 248.36 ms
+solve_momentum_Dzz_blocks                 260.05 ms
+solve_pressure_Dxx_blocks                  75.31 ms
+solve_pressure_Dyy_blocks                  35.65 ms
+solve_pressure_Dzz_blocks                  76.07 ms
+solver_step_aggregate                    1374.01 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       697.47 ms
+solve_momentum_Dyy_blocks                 251.43 ms
+solve_momentum_Dzz_blocks                 262.29 ms
+solve_pressure_Dxx_blocks                  75.33 ms
+solve_pressure_Dyy_blocks                  35.49 ms
+solve_pressure_Dzz_blocks                  75.94 ms
+solver_step_aggregate                    1398.21 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       719.46 ms
+solve_momentum_Dyy_blocks                 253.20 ms
+solve_momentum_Dzz_blocks                 263.46 ms
+solve_pressure_Dxx_blocks                  75.71 ms
+solve_pressure_Dyy_blocks                  35.59 ms
+solve_pressure_Dzz_blocks                  76.07 ms
+solver_step_aggregate                    1423.56 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       683.80 ms
+solve_momentum_Dyy_blocks                 252.02 ms
+solve_momentum_Dzz_blocks                 263.57 ms
+solve_pressure_Dxx_blocks                  75.83 ms
+solve_pressure_Dyy_blocks                  35.70 ms
+solve_pressure_Dzz_blocks                  76.14 ms
+solver_step_aggregate                    1387.10 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       692.85 ms
+solve_momentum_Dyy_blocks                 252.50 ms
+solve_momentum_Dzz_blocks                 260.80 ms
+solve_pressure_Dxx_blocks                  81.78 ms
+solve_pressure_Dyy_blocks                  35.54 ms
+solve_pressure_Dzz_blocks                  75.89 ms
+solver_step_aggregate                    1399.42 ms
+
+solve_momentum_Dxx_blocks_fused_rhs       683.54 ms
+solve_momentum_Dyy_blocks                 252.45 ms
+solve_momentum_Dzz_blocks                 264.64 ms
+solve_pressure_Dxx_blocks                  89.37 ms
+solve_pressure_Dyy_blocks                  35.86 ms
+solve_pressure_Dzz_blocks                  76.08 ms
+solver_step_aggregate                    1401.97 ms
+
