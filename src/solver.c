@@ -62,7 +62,7 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
 
     /* Setting constant unit porosity. */
     field tmp = field_alloc(domain_size, arena);
-    field_fill(domain_size, 1e20, tmp);
+    field_fill(domain_size, 1e6, tmp);
 
     for (uint32_t i = 0; i < domain_size.depth; ++i) {
         for (uint32_t j = 0; j < domain_size.height; ++j) {
@@ -79,15 +79,9 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
                 }
                 */
 
-                /*
-                if (((i < 48 && i > 16) && (j > 16 && j < 26)) ||
-                    ((i > 16) && (j > 46 && j < 56) && (k < 32)) ||
-                    ((i < 48) && (j > 76 && j < 86) && (k > 32)) ||
-                    ((i > 32) && (j > 106 && j < 116))
-                ) {
-                    tmp[idx] = 1e-20;
+                if (k > 32 && k < 48 && j < 32 && j > 16) {
+                    tmp[idx] = 1e-6;
                 }
-                */
 
                 /*
                 if (i > 16 && i < 48 &&

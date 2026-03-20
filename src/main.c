@@ -10,16 +10,16 @@
 #include "output.h"
 #include "thread-array.h"
 
-#define DEPTH 32
-#define HEIGHT 96
-#define WIDTH 64
+#define DEPTH 64
+#define HEIGHT 64
+#define WIDTH 128
 
-#define NUM_TIMESTEPS 160000
+#define NUM_TIMESTEPS 80000
 
 #define NUM_THREADS 4
 
-DEFINE_NU(0.00008)
-DEFINE_DT(0.0001)
+DEFINE_NU(0.0005)
+DEFINE_DT(0.00008)
 DEFINE_DX(1.0 / WIDTH)
 
 DEFINE_CONSTANT_FORCING(0, 0, 0)
@@ -34,11 +34,11 @@ static ftype bc_inlet(ftype x, ftype y, ftype z, ftype t)
     return (1.0 - exp(-t));
 }
 
-DEFINE_CONSTANT_BC_U(0, 0, 0, BC_LEFT)
-DEFINE_CONSTANT_BC_U(0, 0, 0, BC_RIGHT)
-//DEFINE_CONSTANT_BC_U(0, 0.1, 0, BC_TOP)
-DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_TOP)
-//DEFINE_FUNCTION_BC_U(bc_zero, bc_zero, bc_inlet, BC_BOTTOM)
+//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_LEFT)
+//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_RIGHT)
+DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_LEFT)
+DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_RIGHT)
+DEFINE_CONSTANT_BC_U(0, 0, 0, BC_TOP)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BOTTOM)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_FRONT)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BACK)
@@ -65,7 +65,7 @@ static void *run_simulation(void *t_data)
         TIMER_RESTART(solver_step_aggregate);
         solver_step(solver, t, t_data);
 
-        if (t % 1600 == 0) {
+        if (t % 1000 == 0) {
             char output_file_name[64];
             sprintf(output_file_name, "output/solution-cavity-%d.vtk", t);
             output_vtk_write(output, output_file_name, t_data);
