@@ -23,6 +23,6 @@ Currently running in **single-core** on Intel Ultra 7 155H (2023).
 - [x] parallelize kernels across cores (pthreads)
 - [ ] implement schur complement
 - [ ] parallelize schur complement across nodes (MPI)
-- [ ] outflow boundary conditions
+- [x] outflow boundary conditions
 - [ ] benchmark AUTO_VEC performance
 - [ ] benchmark with huge TLB pages
