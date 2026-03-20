@@ -262,8 +262,18 @@ void solve_vtiles_row(const ftype *restrict u_x,
 
     ftype __attribute__((aligned(32))) p_t[VLEN * VLEN];
 
+    /* Homogeneous dirichlet BCs for outlet. */
     vftype p_prev = vbroadcast(0);
-    for (uint32_t tk = 0; tk < width; tk += VLEN) {
+    vstore(p_t + VLEN * (VLEN - 1), p_prev);
+    for (uint32_t k = 1; k < VLEN; ++k) {
+        backward_sub_vcol(tmp_f + VLEN * (width - 1 - k),
+                          tmp_upp[width - 1 - k],
+                          &p_prev,
+                          p_t + VLEN * (VLEN - 1 - k));
+    }
+    transpose_vtile(p_t, VLEN, width, p + width - VLEN);
+
+    for (uint32_t tk = VLEN; tk < width; tk += VLEN) {
         for (uint32_t k = 0; k < VLEN; ++k) {
             backward_sub_vcol(tmp_f + VLEN * (width - 1 - (tk + k)),
                               tmp_upp[width - 1 - (tk + k)],
