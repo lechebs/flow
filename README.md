@@ -6,6 +6,10 @@
 |:--------:|:-------:|
 | Velocity field magnitude | Pressure colored velocity field |
 
+| ![](images/flow-over-cube.gif) |
+|:--------:|:-------:|
+| Vorticity magnitude |
+
 ## Performance
 
 Currently running in **single-core** on Intel Ultra 7 155H (2023).

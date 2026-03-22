@@ -17,11 +17,13 @@ void output_vtk_destroy(OutputVTK *output);
 
 void output_vtk_attach_field(OutputVTK *output,
                              const_field field,
+                             uint64_t offset,
                              const char *name,
                              ArenaAllocator *arena);
 
 void output_vtk_attach_field3(OutputVTK *output,
                              const_field3 field,
+                             uint64_t offset,
                              const char *name,
                              ArenaAllocator *arena);
 
