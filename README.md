@@ -6,9 +6,9 @@
 |:--------:|:-------:|
 | Velocity field magnitude | Pressure colored velocity field |
 
-| ![](images/flow-over-cube.gif) |
-|:--------:|:-------:|
-| Vorticity magnitude |
+|![](images/flow-over-cube.gif)|
+|:--------:|
+| Flow past cube (vorticity magnitude) |
 
 ## Performance
 
