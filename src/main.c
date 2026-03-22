@@ -10,17 +10,18 @@
 #include "output.h"
 #include "thread-array.h"
 
-#define DEPTH 64
-#define HEIGHT 64
-#define WIDTH 128
+#define DEPTH 128
+#define HEIGHT 192
+#define WIDTH 256
 
-#define NUM_TIMESTEPS 80000
+#define FINAL_TIME 15.0
 
-#define NUM_THREADS 4
+#define NUM_THREADS 8
 
-DEFINE_NU(0.0005)
-DEFINE_DT(0.00008)
-DEFINE_DX(1.0 / WIDTH)
+//DEFINE_NU(0.0005)
+DEFINE_NU(0.0003)
+DEFINE_DT(0.001)
+DEFINE_DX(0.00375)
 
 DEFINE_CONSTANT_FORCING(0, 0, 0)
 
@@ -31,17 +32,22 @@ static ftype bc_zero(ftype x, ftype y, ftype z, ftype t)
 
 static ftype bc_inlet(ftype x, ftype y, ftype z, ftype t)
 {
-    return (1.0 - exp(-t));
+    return 2 * (1.0 - exp(-t));
 }
 
-//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_LEFT)
-//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_RIGHT)
 DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_LEFT)
 DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_RIGHT)
-DEFINE_CONSTANT_BC_U(0, 0, 0, BC_TOP)
-DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BOTTOM)
-DEFINE_CONSTANT_BC_U(0, 0, 0, BC_FRONT)
-DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BACK)
+
+DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_TOP)
+DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_BOTTOM)
+
+DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_FRONT)
+DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_BACK)
+
+//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_TOP)
+//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BOTTOM)
+//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_FRONT)
+//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BACK)
 
 typedef struct {
     Solver *solver;
@@ -57,17 +63,19 @@ static void *run_simulation(void *t_data)
     OutputVTK *output = sim_data->output;
 
     uint32_t t_id = ((Thread *) t_data)->t_id;
-    //output_vtk_write(output, "output/solution-cavity-0.vtk", t_data);
+    output_vtk_write(output, "output/solution-karman-0.vtk", t_data);
     thread_wait_on_barrier(t_data);
 
+    uint32_t num_timesteps = (FINAL_TIME - _DT / 2) / _DT + 1;
+
     TIMER_CREATE(solver_step_aggregate);
-    for (int t = 1; t < NUM_TIMESTEPS + 1; ++t) {
+    for (uint32_t t = 1; t < num_timesteps + 1; ++t) {
         TIMER_RESTART(solver_step_aggregate);
         solver_step(solver, t, t_data);
 
-        if (t % 1000 == 0) {
+        if (t % 250 == 0) {
             char output_file_name[64];
-            sprintf(output_file_name, "output/solution-cavity-%d.vtk", t);
+            sprintf(output_file_name, "output/solution-karman-%d.vtk", t);
             output_vtk_write(output, output_file_name, t_data);
         }
 
@@ -88,12 +96,13 @@ int main(void)
 
     field_size size = { WIDTH, HEIGHT, DEPTH };
     OutputVTK *output = output_vtk_create(size, _DX, &arena);
+    uint64_t offset = 0;//HEIGHT * WIDTH * (DEPTH / 2 - 1);
 
-    output_vtk_attach_field(output, solver_get_porosity(solver),
+    output_vtk_attach_field(output, solver_get_porosity(solver), offset,
                             "porosity", &arena);
-    output_vtk_attach_field(output, solver_get_pressure(solver),
+    output_vtk_attach_field(output, solver_get_pressure(solver), offset,
                             "pressure", &arena);
-    output_vtk_attach_field3(output, solver_get_velocity(solver),
+    output_vtk_attach_field3(output, solver_get_velocity(solver), offset,
                              "velocity", &arena);
 
     ThreadArray *t_array = thread_array_create(0, &arena);

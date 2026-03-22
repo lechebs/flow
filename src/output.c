@@ -49,10 +49,11 @@ OutputVTK *output_vtk_create(field_size grid_size,
 
 void output_vtk_attach_field(OutputVTK *output,
                              const_field field,
+                             uint64_t offset,
                              const char *name,
                              ArenaAllocator *arena)
 { struct OutputNode *node = arena_push_noalign(arena, sizeof(struct OutputNode));
-    node->data[0] = field;
+    node->data[0] = field + offset;
     node->name = name;
     node->type = OUTPUT_NODE_SCALAR;
 
@@ -62,14 +63,15 @@ void output_vtk_attach_field(OutputVTK *output,
 
 void output_vtk_attach_field3(OutputVTK *output,
                               const_field3 field,
+                              uint64_t offset,
                               const char *name,
                               ArenaAllocator *arena)
 {
     struct OutputNode *node = arena_push_noalign(arena,
                                                  sizeof(struct OutputNode));
-    node->data[0] = field.x;
-    node->data[1] = field.y;
-    node->data[2] = field.z;
+    node->data[0] = field.x + offset;
+    node->data[1] = field.y + offset;
+    node->data[2] = field.z + offset;
     node->name = name;
     node->type = OUTPUT_NODE_VECTOR;
 

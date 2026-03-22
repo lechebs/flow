@@ -404,7 +404,7 @@ void apply_outlet_bc(const ftype *restrict w,
                      vftype *restrict us_y,
                      vftype *restrict us_z)
 {
-    /* (1 + 2w/d^2) u_n-1 + 2w/d^2 u_n = f */
+    /* (1 + 2w/d^2) u_n - 2w/d^2 u_n-1 = f */
 
     vftype ws = vload(w);
     vftype upper_prevs = vload(upper_prev);
@@ -417,14 +417,20 @@ void apply_outlet_bc(const ftype *restrict w,
     vftype fs_y = vload(f_y);
     vftype fs_z = vload(f_z);
 
-    *us_x = (fs_x + ws * fs_x_prevs) /
-            (1 + 2 * ws + ws * upper_prevs);
+    /*
+    *us_x = (fs_x + 2 * ws * fs_x_prevs) /
+            (1 + 2 * ws + 2 * ws * upper_prevs);
 
     *us_y = (fs_y + ws * fs_y_prevs) /
             (1 + ws + ws * upper_prevs);
 
     *us_z = (fs_z + ws * fs_z_prevs) /
             (1 + ws + ws * upper_prevs);
+    */
+
+    *us_x = fs_x_prevs / (1 + upper_prevs);
+    *us_y = fs_y_prevs / (1 + upper_prevs);
+    *us_z = fs_z_prevs / (1 + upper_prevs);
 }
 
 static inline __attribute__((always_inline))
@@ -2380,31 +2386,6 @@ void momentum_solve(const_field porosity,
 
     thread_wait_on_barrier(thread);
     TIMER_ELAPSED(solve_momentum_Dzz_blocks, t_id == 0);
-
-    /* Now enforce BCs on the final solution.
-     * WARNING: doesn't seem to affect convergence. */
-    /*
-    for (uint32_t i = 1; i < size.depth - 1; ++i) {
-        for (uint32_t j = 0; j < size.height; ++j) {
-            uint64_t idx = size.height * size.width * i + size.width * j;
-            velocity_x[idx] = velocity_Dxx.x[idx];
-            velocity_y[idx] = velocity_Dxx.y[idx];
-            velocity_z[idx] = velocity_Dxx.z[idx];
-            velocity_x[idx + size.width - 1] =
-                velocity_Dxx.x[idx + size.width - 1];
-        }
-
-        for (uint32_t k = 0; k < size.width; ++k) {
-            uint64_t idx = size.height * size.width * i + k;
-            velocity_x[idx] = velocity_Dyy.x[idx];
-            velocity_y[idx] = velocity_Dyy.y[idx];
-            velocity_z[idx] = velocity_Dyy.z[idx];
-
-            idx += size.width * (size.height - 1);
-            velocity_y[idx] = velocity_Dyy.y[idx];
-        }
-    }
-    */
 
     arena_exit(arena);
 }

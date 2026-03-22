@@ -1,3 +1,5 @@
+#include <math.h>
+
 #include "solver.h"
 #include "momentum.h"
 #include "pressure.h"
@@ -62,34 +64,23 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
 
     /* Setting constant unit porosity. */
     field tmp = field_alloc(domain_size, arena);
-    field_fill(domain_size, 1e6, tmp);
+    field_fill(domain_size, 1e8, tmp);
 
     for (uint32_t i = 0; i < domain_size.depth; ++i) {
         for (uint32_t j = 0; j < domain_size.height; ++j) {
             for (uint32_t k = 0; k < domain_size.width; ++k) {
                 uint64_t idx = field_idx(domain_size, k, j, i);
 
-                /*
-                uint64_t dist = (i - 32) * (i - 32) +
-                                (j - 32) * (j - 32) +
-                                (k - 32) * (k - 32);
+                ftype x = k * _DX;
+                ftype y = j * _DX;
+                ftype z = i * _DX;
 
-                if (dist < 64) {
-                    tmp[idx] = 1e-5;// * (64.0 - dist) / 64.0;
-                }
-                */
+                double sdf = pow(pow(y - _DX * domain_size.height * 0.5, 8) +
+                                 pow(x - _DX * domain_size.width * 0.25, 8) +
+                                 pow(z - _DX * domain_size.depth * 0.5, 8), 1.0 / 8) - 0.09;
 
-                if (k > 32 && k < 48 && j < 32 && j > 16) {
-                    tmp[idx] = 1e-6;
-                }
-
-                /*
-                if (i > 16 && i < 48 &&
-                    j > 16 && j < 48 &&
-                    k > 16 && k < 48) {
-                    tmp[idx] = 1e-10;
-                }
-                */
+                double exp = 8 * tanh(sdf * 30);
+                tmp[idx] = pow(10, exp);
             }
         }
     }
