@@ -1,10 +1,13 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <mpi.h>
+
 #include "test.h"
 #include "ftype.h"
 #include "field.h"
 #include "consts.h"
+#include "ddecomp.h"
 
 DEFINE_NU(1.00)
 DEFINE_DT(0.01)
@@ -74,73 +77,24 @@ DEF_TEST(test_vtranspose)
 #endif
 }
 
-DEF_TEST(test_momentum_Dxx_rhs,
-         ArenaAllocator *arena,
-         int depth, int height, int width);
+DEF_TEST(test_tdma_mod, ArenaAllocator *arena);
 
-DEF_TEST(test_momentum_Dxx_solver,
-         ArenaAllocator *arena,
-         int depth, int height, int width);
-
-DEF_TEST(test_momentum_Dyy_solver,
-         ArenaAllocator *arena,
-         int depth, int height, int width);
-
-DEF_TEST(test_momentum_Dzz_solver,
-         ArenaAllocator *arena,
-         int depth, int height, int width);
-
-DEF_TEST(test_pressure_Dxx_solver,
-         ArenaAllocator *arena,
-         int depth, int height, int width);
-
-DEF_TEST(test_pressure_Dyy_solver,
-         ArenaAllocator *arena,
-         int depth, int height, int width);
-
-DEF_TEST(test_pressure_Dzz_solver,
-         ArenaAllocator *arena,
-         int depth, int height, int width);
-
-int main(void)
+int main(int argc, char *argv[])
 {
+    MPI_Init(&argc, &argv);
+
+    srand(42 + get_proc_rank(MPI_COMM_WORLD));
+
     ArenaAllocator arena;
-    arena_init(&arena, 1ul << 32);
+    arena_init(&arena, 1ul << 20);
 
-    //RUN_TEST(test_vtranspose);
+    if (get_proc_rank(MPI_COMM_WORLD) == 0) {
+        RUN_TEST(test_vtranspose);
+    }
 
-    //RUN_TEST(test_momentum_Dxx_rhs, &arena, 16, 32, 64);
-    //RUN_TEST(test_momentum_Dxx_rhs, &arena, 32, 64, 128);
-    //RUN_TEST(test_momentum_Dxx_rhs, &arena, 128, 128, 64);
+    RUN_TEST(test_tdma_mod, &arena);
 
-    RUN_TEST(test_momentum_Dxx_solver, &arena, 16, 16, 16);
-    RUN_TEST(test_momentum_Dxx_solver, &arena, 128, 128, 64);
-    RUN_TEST(test_momentum_Dxx_solver, &arena, 512, 32, 256);
-    RUN_TEST(test_momentum_Dxx_solver, &arena, 256, 256, 256);
-
-    RUN_TEST(test_momentum_Dyy_solver, &arena, 32, 64, 64);
-    RUN_TEST(test_momentum_Dyy_solver, &arena, 128, 128, 64);
-    RUN_TEST(test_momentum_Dyy_solver, &arena, 512, 32, 256);
-
-    RUN_TEST(test_momentum_Dzz_solver, &arena, 32, 64, 64);
-    RUN_TEST(test_momentum_Dzz_solver, &arena, 128, 128, 64);
-    RUN_TEST(test_momentum_Dzz_solver, &arena, 32, 32, 256);
-    RUN_TEST(test_momentum_Dzz_solver, &arena, 256, 256, 256);
-
-    RUN_TEST(test_pressure_Dxx_solver, &arena, 1, 32, 32);
-    RUN_TEST(test_pressure_Dxx_solver, &arena, 32, 64, 128);
-    RUN_TEST(test_pressure_Dxx_solver, &arena, 128, 64, 512);
-    RUN_TEST(test_pressure_Dxx_solver, &arena, 256, 256, 256);
-
-    RUN_TEST(test_pressure_Dyy_solver, &arena, 1, 32, 32);
-    RUN_TEST(test_pressure_Dyy_solver, &arena, 32, 64, 128);
-    RUN_TEST(test_pressure_Dyy_solver, &arena, 128, 64, 512);
-
-    RUN_TEST(test_pressure_Dzz_solver, &arena, 64, 32, 32);
-    RUN_TEST(test_pressure_Dzz_solver, &arena, 256, 32, 128);
-    RUN_TEST(test_pressure_Dzz_solver, &arena, 128, 64, 64);
-
-    arena_destroy(&arena);
+    MPI_Finalize();
 
     return 0;
 }
