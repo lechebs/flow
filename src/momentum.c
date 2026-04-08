@@ -10,6 +10,7 @@
 #include "consts.h"
 #include "timeit.h"
 #include "thread-array.h"
+#include "ddecomp.h"
 
 DECLARE_FORCING()
 
@@ -19,283 +20,6 @@ DECLARE_BC_U(BC_FRONT)
 DECLARE_BC_U(BC_RIGHT)
 DECLARE_BC_U(BC_BOTTOM)
 DECLARE_BC_U(BC_BACK)
-
-static inline __attribute__((always_inline))
-vftype compute_g_comp_at(const ftype *restrict eta,
-                         const ftype *restrict zeta,
-                         const ftype *restrict u,
-                         uint64_t idx,
-                         uint32_t height,
-                         uint32_t width,
-                         vftype k,
-                         vftype eta_,
-                         vftype zeta_,
-                         vftype u_,
-                         vftype D_pp,
-                         vftype f_)
-{
-    /* Compute second derivatives. */
-    /* WARNING: Allocate extra face at the start. */
-    vftype Dxx_eta = compute_Dxx_at(eta, idx, eta_);
-    vftype Dyy_zeta = compute_Dyy_at(zeta, idx, width, zeta_);
-    vftype Dzz_u = compute_Dzz_at(u, idx, height * width, u_);
-
-    vftype nu = vbroadcast(_NU);
-    vftype inv_dx = vbroadcast(1 / _DX);
-    vftype inv_dxdx = vbroadcast(1 / (_DX * _DX));
-
-    /* yes, it's ugly :/ */
-    return vadd(f_,
-                vsub(vmul(nu,
-                          vsub(vmul(vadd(Dxx_eta,
-                                         vadd(Dyy_zeta,
-                                              Dzz_u)),
-                                    inv_dxdx),
-                               vdiv(u_, k))),
-                     vmul(D_pp,
-                          inv_dx)));
-}
-
-static inline __attribute__((always_inline))
-vftype compute_Dxx_rhs_comp_at(const ftype *restrict eta,
-                               const ftype *restrict zeta,
-                               const ftype *restrict u,
-                               uint64_t idx,
-                               uint32_t height,
-                               uint32_t width,
-                               vftype k,
-                               vftype D_pp,
-                               vftype dt_beta,
-                               vftype f)
-{
-    vftype eta_ = vload(eta + idx);
-    vftype zeta_ = vload(zeta + idx);
-    vftype u_ = vload(u + idx);
-    vftype g = compute_g_comp_at(eta, zeta, u,
-                                 idx, height, width,
-                                 k, eta_, zeta_, u_, D_pp, f);
-
-    return vsub(vfmadd(dt_beta, g, u_), eta_);
-}
-
-void compute_Dxx_rhs(const ftype *restrict k, /* Porosity. */
-                     /* Pressure from previous half-step. */
-                     const ftype *restrict p,
-                     /* Pressure correction from previous half-step. */
-                     const ftype *restrict phi,
-                     /* (I - wDxx) velocity from previous step */
-                     const ftype *restrict eta_x,
-                     const ftype *restrict eta_y,
-                     const ftype *restrict eta_z,
-                     /* (I - wDyy) velocity from previous step */
-                     const ftype *restrict zeta_x,
-                     const ftype *restrict zeta_y,
-                     const ftype *restrict zeta_z,
-                     /* Velocity from previous step */
-                     const ftype *restrict u_x,
-                     const ftype *restrict u_y,
-                     const ftype *restrict u_z,
-                     uint32_t depth,
-                     uint32_t height,
-                     uint32_t width,
-                     uint32_t timestep,
-                     ftype *restrict rhs_x,
-                     ftype *restrict rhs_y,
-                     ftype *restrict rhs_z)
-{
-    vftype vdt = vbroadcast(_DT);
-    vftype vdt_nu = vbroadcast(_DT * _NU);
-
-    /* We can avoid computing rhs at i = 0, j = 0, k = 0,
-     * i = depth - 1 (for z), j = height - 1 (for y)
-     * and k = width - 1 (for x). We set rhs to 0 there
-     * at the moment. */
-
-    /* Fill with zeros first row, since solution is enforced
-     * by BCs there (only valid for constant BCs, right?) */
-
-    /*
-    for (uint32_t j = 0; j < height; ++j) {
-        for (uint32_t l = 0; l < width; l += VLEN) {
-            uint64_t idx = width * j + l;
-            vstore(rhs_x + idx, vbroadcast(0));
-            vstore(rhs_y + idx, vbroadcast(0));
-            vstore(rhs_z + idx, vbroadcast(0));
-        }
-    }
-    */
-
-    for (uint32_t i = 1; i < depth; ++i) {
-        /* Fill with zeros first row, since solution is enforced by BCs
-         * there (only valid for constant BCs, right?) */
-
-        /*
-        for (uint32_t l = 0; l < width; l += VLEN) {
-            uint64_t idx = height * width * i + l;
-            vstore(rhs_x + idx, vbroadcast(0));
-            vstore(rhs_y + idx, vbroadcast(0));
-            vstore(rhs_z + idx, vbroadcast(0));
-        }
-        */
-
-        for (uint32_t j = 1; j < height; j++) {
-            for (uint32_t l = 0; l < width; l += VLEN) {
-                uint64_t idx = height * width * i + width * j + l;
-
-                /* Compute the gradient of pressure predictor pp = p + phi. */
-                vftype Dx_p, Dy_p, Dz_p;
-                compute_grad_at(p, idx, height, width,
-                                &Dx_p, &Dy_p, &Dz_p);
-                vftype Dx_phi, Dy_phi, Dz_phi;
-                compute_grad_at(phi, idx, height, width,
-                                &Dx_phi, &Dy_phi, &Dz_phi);
-
-                vftype Dx_pp = vadd(Dx_p, Dx_phi);
-                vftype Dy_pp = vadd(Dy_p, Dy_phi);
-                vftype Dz_pp = vadd(Dz_p, Dz_phi);
-
-                /* Computes dt/beta */
-                vftype k_ = vload(k + idx);
-                vftype kk = vadd(k_, k_);
-                vftype dt_beta = vdiv(vmul(kk, vdt), vadd(kk, vdt_nu));
-
-                vftype f_x, f_y, f_z;
-                _get_forcing(l, j, i, timestep, &f_x, &f_y, &f_z);
-
-                /* NT stores make no difference here,
-                 * loads are bottlenecking. */
-                vstore(rhs_x + idx,
-                       compute_Dxx_rhs_comp_at(eta_x, zeta_x, u_x,
-                                               idx, height, width,
-                                               k_, Dx_pp, dt_beta, f_x));
-                vstore(rhs_y + idx,
-                       compute_Dxx_rhs_comp_at(eta_y, zeta_y, u_y,
-                                               idx, height, width,
-                                               k_, Dy_pp, dt_beta, f_y));
-                vstore(rhs_z + idx,
-                       compute_Dxx_rhs_comp_at(eta_z, zeta_z, u_z,
-                                               idx, height, width,
-                                               k_, Dz_pp, dt_beta, f_z));
-            }
-
-            /* For y and z, correct Dxx(eta) using the ghost node. */
-            uint64_t idx = height * width * i + width * j + width - 1;
-            //ftype coeff = 2 * k[idx] * _DT / (2 * k[idx] + _DT * _NU) *
-            //              _NU / (2 * _DX * _DX);
-            ftype coeff = (2 * _DT * _NU * k[idx]) / (2 * k[idx] + _DT * _NU) /
-                          (_DX * _DX);
-
-            vftype u_ex_x, u_ex_y, u_ex_z;
-            _get_right_bc_u(width - 1, j, i, timestep - 1, &u_ex_x, &u_ex_y, &u_ex_z);
-
-            ftype tmp[VLEN];
-            /*
-            vstore(tmp, u_ex_y);
-            rhs_y[idx] -= coeff * (eta_y[idx + 1] + eta_y[idx] - 2 * tmp[0]);
-            vstore(tmp, u_ex_z);
-            rhs_z[idx] -= coeff * (eta_z[idx + 1] + eta_z[idx] - 2 * tmp[0]);
-            */
-
-            vstore(tmp, u_ex_y);
-            rhs_y[idx] -= coeff * (eta_y[idx + 1] - 1.0 / 3 * eta_y[idx - 1]
-                                                  + 2 * eta_y[idx]
-                                                  - 8.0 / 3 * tmp[0]);
-
-            vstore(tmp, u_ex_z);
-            rhs_z[idx] -= coeff * (eta_z[idx + 1] - 1.0 / 3 * eta_z[idx - 1]
-                                                  + 2 * eta_z[idx]
-                                                  - 8.0 / 3 * tmp[0]);
-        }
-
-        /* TODO: Temporary patch, perform loop peeling instead. */
-        for (uint32_t l = 0; l < width; l += VLEN) {
-            uint64_t idx = height * width * i + width * (height - 1) + l;
-            /* For x and z, correct Dyy(zeta) using the ghost node. */
-
-            vftype k_ = vload(k + idx);
-            vftype coeff = (2 * _DT * _NU * k_) /
-                           (2 * k_ + _DT * _NU) / (_DX * _DX);
-                        //2 * k_ * _DT / (2 * k_ + _DT * _NU) *
-                           //_NU / (2 * _DX * _DX);
-
-            vftype u_ex_x, u_ex_y, u_ex_z;
-            /* WARNING:: We need previous timestep u_ex values here!! */
-            _get_bottom_bc_u(l, height - 1, i, timestep - 1,
-                             &u_ex_x, &u_ex_y, &u_ex_z);
-
-            /*
-            vstore(rhs_x + idx, vload(rhs_x + idx) -
-                                coeff * (vload(zeta_x + idx + width) +
-                                         vload(zeta_x + idx) - 2 * u_ex_x));
-
-            vstore(rhs_z + idx, vload(rhs_z + idx) -
-                                coeff * (vload(zeta_z + idx + width) +
-                                         vload(zeta_z + idx) - 2 * u_ex_z));
-            */
-
-            vstore(rhs_x + idx,
-                   vload(rhs_x + idx) -
-                   coeff * (vload(zeta_x + idx + width)
-                            - (ftype) 1.0 / 3 * vload(zeta_x + idx - width)
-                            + (ftype) 2 * vload(zeta_x + idx)
-                            - (ftype) 8.0 / 3 * u_ex_x));
-
-            vstore(rhs_z + idx,
-                   vload(rhs_z + idx) -
-                   coeff * (vload(zeta_z + idx + width)
-                            - (ftype) 1.0 / 3 * vload(zeta_z + idx - width)
-                            + (ftype) 2 * vload(zeta_z + idx)
-                            - (ftype) 8.0 / 3 * u_ex_z));
-
-            /* Set rhs=0 here, since solution is enforced on the wall. */
-            vstore(rhs_y + idx, vbroadcast(0));
-        }
-    }
-
-    /* TODO: Temporary patch, perform loop peeling instead. */
-    for (uint32_t j = 0; j < height; ++j) {
-        for (uint32_t l = 0; l < width; l += VLEN) {
-            uint64_t idx = height * width * (depth - 1) + width * j + l;
-            /* For x and y, correct Dzz(u) using the ghost node. */
-
-            vftype k_ = vload(k + idx);
-            vftype coeff = (2 * _DT * _NU * k_) /
-                           (2 * k_ + _DT * _NU) / (_DX * _DX);
-
-            vftype u_ex_x, u_ex_y, u_ex_z;
-            _get_back_bc_u(l, j, depth - 1, timestep - 1,
-                           &u_ex_x, &u_ex_y, &u_ex_z);
-
-            /*
-            vstore(rhs_x + idx, vload(rhs_x + idx) -
-                                coeff * (vload(u_x + idx + height * width) +
-                                         vload(u_x + idx) - 2 * u_ex_x));
-
-            vstore(rhs_y + idx, vload(rhs_y + idx) -
-                                coeff * (vload(u_y + idx + height * width) +
-                                         vload(u_y + idx) - 2 * u_ex_y));
-            */
-
-            vstore(rhs_x + idx,
-                   vload(rhs_x + idx) -
-                   coeff * (vload(u_x + idx + height * width)
-                            - (ftype) 1.0 / 3 * vload(u_x + idx - height * width)
-                            + (ftype) 2 * vload(u_x + idx)
-                            - (ftype) 8.0 / 3 * u_ex_x));
-
-            vstore(rhs_y + idx,
-                   vload(rhs_y + idx) -
-                   coeff * (vload(u_y + idx + height * width)
-                            - (ftype) 1.0 / 3 * vload(u_y + idx - height * width)
-                            + (ftype) 2 * vload(u_y + idx)
-                            - (ftype) 8.0 / 3 * u_ex_y));
-
-            /* WARNING: Setting rhs=0 here, since solution
-             * is enforced on the wall. */
-            vstore(rhs_z + idx, vbroadcast(0));
-        }
-    }
-}
 
 #ifdef AUTO_VEC
     #define vneg(v) (-(v))
@@ -435,66 +159,6 @@ void apply_right_bc(const ftype *restrict w,
     vstore(f_z, *u_z);
 }
 
-#ifdef AUTO_VEC
-
-/* Solves Au=f using the Thomas algorithm,
- * where A is a nxn tridiagonal matrix of the type:
- *
- * [ 1+2w_0      -w_0         0       0  ...]
- * [   -w_1    1+2w_1      -w_1       0  ...]
- * [      0      -w_2    1+2w_2    -w_2  ...]
- * ...
- */
-static void solve_wDxx_tridiag(const ftype *restrict w,
-                               uint32_t y,
-                               uint32_t z,
-                               uint32_t n,
-                               uint32_t t,
-                               ftype *restrict tmp,
-                               ftype *restrict f_x,
-                               ftype *restrict f_y,
-                               ftype *restrict f_z,
-                               ftype *restrict u_x,
-                               ftype *restrict u_y,
-                               ftype *restrict u_z)
-{
-    /* Perform gaussian elimination. */
-    /* Using tmp to store reduced upper diagonal. */
-
-    /* Left boundary conditions! */
-    tmp[0] = 0;
-    _get_left_bc_u(0, y, z, t, &f_x[0], &f_y[0], &f_z[0]);
-
-    for (int i = 1; i < n - 1; ++i) {
-        ftype w_i = w[i];
-        ftype norm_coef = 1 + 2 * w_i + w_i * tmp[i - 1];
-        tmp[i] = -w_i / norm_coef;
-        f_x[i] = (f_x[i] + w_i * f_x[i - 1]) / norm_coef;
-        f_y[i] = (f_y[i] + w_i * f_y[i - 1]) / norm_coef;
-        f_z[i] = (f_z[i] + w_i * f_z[i - 1]) / norm_coef;
-    }
-
-    /* Right boundary conditions! */
-    ftype un_y, un_z;
-    _get_right_bc_u(0, y, z, t, &u_x[n - 1], &un_y, &un_z);
-    ftype w_n = w[n - 1];
-    ftype norm_coeff = 1 + 3 * w_n + w_n * tmp[n - 2];
-    u_y[n - 1] = (-2 * w_n * un_y - f_y[n - 1] + w_n * f_y[n - 2]) /
-                 norm_coeff;
-    u_z[n - 1] = (-2 * w_n * un_z - f_z[n - 1] + w_n * f_z[n - 2]) /
-                 norm_coeff;
-
-    /* Perform backward substitution. */
-    for (int i = 1; i < n; ++i) {
-        ftype tmp_i = tmp[n - 1 - i];
-        u_x[n - i - 1] = f_x[n - 1 - i] - tmp_i * u_x[n - i];
-        u_y[n - i - 1] = f_y[n - 1 - i] - tmp_i * u_y[n - i];
-        u_z[n - i - 1] = f_z[n - 1 - i] - tmp_i * u_z[n - i];
-    }
-}
-
-#else
-
 static inline __attribute__((always_inline))
 void gauss_reduce_vstrip(const ftype *restrict w,
                          ftype *restrict upper_prev,
@@ -543,8 +207,6 @@ void backward_sub_vstrip(const ftype *restrict f_x,
     *u_z_prevs = vfmadd(vneg(uppers), *u_z_prevs, fs_z);
     vstore(u_z, *u_z_prevs);
 }
-
-#endif
 
 #define INNER_COL  0
 #define INNER_ROW  0
@@ -726,27 +388,27 @@ void compute_Dxx_Dyy_Dzz(const ftype *restrict eta,
 
         if (component == COMPONENT_X) {
             vftype _y, _z; /* Dummy variables, they will be optmized away. */
-            _get_back_bc_u(k, j + 0, depth - 1, timestep - 1, &v0, &_y, &_z);
-            _get_back_bc_u(k, j + 1, depth - 1, timestep - 1, &v1, &_y, &_z);
-            _get_back_bc_u(k, j + 2, depth - 1, timestep - 1, &v2, &_y, &_z);
-            _get_back_bc_u(k, j + 3, depth - 1, timestep - 1, &v3, &_y, &_z);
+            _get_back_bc_u(k, j + 0, i, timestep - 1, &v0, &_y, &_z);
+            _get_back_bc_u(k, j + 1, i, timestep - 1, &v1, &_y, &_z);
+            _get_back_bc_u(k, j + 2, i, timestep - 1, &v2, &_y, &_z);
+            _get_back_bc_u(k, j + 3, i, timestep - 1, &v3, &_y, &_z);
 #ifdef FLOAT
-            _get_back_bc_u(k, j + 0, depth - 1, timestep - 1, &v4, &_y, &_z);
-            _get_back_bc_u(k, j + 1, depth - 1, timestep - 1, &v5, &_y, &_z);
-            _get_back_bc_u(k, j + 2, depth - 1, timestep - 1, &v6, &_y, &_z);
-            _get_back_bc_u(k, j + 3, depth - 1, timestep - 1, &v7, &_y, &_z);
+            _get_back_bc_u(k, j + 0, i, timestep - 1, &v4, &_y, &_z);
+            _get_back_bc_u(k, j + 1, i, timestep - 1, &v5, &_y, &_z);
+            _get_back_bc_u(k, j + 2, i, timestep - 1, &v6, &_y, &_z);
+            _get_back_bc_u(k, j + 3, i, timestep - 1, &v7, &_y, &_z);
 #endif
         } else { /* component == COMPONENT_Y */
             vftype _x, _z; /* Dummy variables, they will be optmized away. */
-            _get_back_bc_u(k, j + 0, depth - 1, timestep - 1, &_x, &v0, &_z);
-            _get_back_bc_u(k, j + 1, depth - 1, timestep - 1, &_x, &v1, &_z);
-            _get_back_bc_u(k, j + 2, depth - 1, timestep - 1, &_x, &v2, &_z);
-            _get_back_bc_u(k, j + 3, depth - 1, timestep - 1, &_x, &v3, &_z);
+            _get_back_bc_u(k, j + 0, i, timestep - 1, &_x, &v0, &_z);
+            _get_back_bc_u(k, j + 1, i, timestep - 1, &_x, &v1, &_z);
+            _get_back_bc_u(k, j + 2, i, timestep - 1, &_x, &v2, &_z);
+            _get_back_bc_u(k, j + 3, i, timestep - 1, &_x, &v3, &_z);
 #ifdef FLOAT
-            _get_back_bc_u(k, j + 0, depth - 1, timestep - 1, &_x, &v4, &_z);
-            _get_back_bc_u(k, j + 1, depth - 1, timestep - 1, &_x, &v5, &_z);
-            _get_back_bc_u(k, j + 2, depth - 1, timestep - 1, &_x, &v6, &_z);
-            _get_back_bc_u(k, j + 3, depth - 1, timestep - 1, &_x, &v7, &_z);
+            _get_back_bc_u(k, j + 0, i, timestep - 1, &_x, &v4, &_z);
+            _get_back_bc_u(k, j + 1, i, timestep - 1, &_x, &v5, &_z);
+            _get_back_bc_u(k, j + 2, i, timestep - 1, &_x, &v6, &_z);
+            _get_back_bc_u(k, j + 3, i, timestep - 1, &_x, &v7, &_z);
 #endif
         }
 
@@ -791,6 +453,8 @@ void compute_Dxx_Dyy_Dzz(const ftype *restrict eta,
     if (is_last_row && component != COMPONENT_Y) {
         if (component == COMPONENT_X) {
             vftype _y, _z;
+            /* WARNING: Do not use global_j here, since it corresponds
+             * to the tile global_j! Use global_j + VLEN */
             _get_bottom_bc_u(k, height - 1, i, timestep - 1, &ztn, &_y, &_z);
         } else { /* component == COMPONENT_Z */
             vftype _x, _y;
@@ -1029,7 +693,7 @@ void solve_vtile_row(const ftype *restrict porosity,
                      const ftype *restrict vel_x,
                      const ftype *restrict vel_y,
                      const ftype *restrict vel_z,
-                     uint32_t i,
+                     uint32_t global_i,
                      uint32_t j,
                      uint32_t depth,
                      uint32_t height,
@@ -1055,11 +719,11 @@ void solve_vtile_row(const ftype *restrict porosity,
     compute_rhs_vtile(porosity, p, phi, eta_x, eta_y, eta_z,
                       zeta_x, zeta_y, zeta_z, vel_x, vel_y, vel_z,
                       is_last_face, is_last_row, INNER_COL,
-                      i, j, 0, depth, height, width, timestep,
+                      global_i, j, 0, depth, height, width, timestep,
                       f_x_t, f_y_t, f_z_t);
 
     /* Apply BCs on the first column of the tile. */
-    apply_left_bc(0, j, i, timestep,
+    apply_left_bc(0, j, global_i, timestep,
                   tmp_upp, tmp_f_x, tmp_f_y, tmp_f_z);
     /* Reduce remaining columns of the tile. */
     for (int k = 1; k < VLEN; ++k) {
@@ -1083,7 +747,7 @@ void solve_vtile_row(const ftype *restrict porosity,
                           zeta_x + tk, zeta_y + tk, zeta_z + tk,
                           vel_x + tk, vel_y + tk, vel_z + tk,
                           is_last_face, is_last_row, INNER_COL,
-                          i, j, tk, depth, height, width, timestep,
+                          global_i, j, tk, depth, height, width, timestep,
                           f_x_t, f_y_t, f_z_t);
  
         for (uint32_t k = 0; k < VLEN; ++k) {
@@ -1113,7 +777,8 @@ void solve_vtile_row(const ftype *restrict porosity,
                       vel_y + width - VLEN,
                       vel_z + width - VLEN,
                       is_last_face, is_last_row, LAST_COL,
-                      i, j, width - VLEN, depth, height, width, timestep,
+                      global_i, j, width - VLEN,
+                      depth, height, width, timestep,
                       f_x_t, f_y_t, f_z_t);
 
     /* Reduce last tile except last column. */
@@ -1134,7 +799,7 @@ void solve_vtile_row(const ftype *restrict porosity,
                    tmp_upp + VLEN * (width - 2),
                    tmp_f_y + VLEN * (width - 2),
                    tmp_f_z + VLEN * (width - 2),
-                   width - 1, j, i,
+                   width - 1, j, global_i,
                    timestep,
                    /* Write solutions into f_t buffers,
                     * we will reuse them for u_t buffers */
@@ -1209,18 +874,22 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                                        uint32_t timestep,
                                        ftype *restrict tmp,
                                        uint32_t t_id,
-                                       uint32_t num_threads)
+                                       uint32_t num_threads,
+                                       int proc_rank,
+                                       int num_procs)
 {
     uint32_t block_depth = (depth - 1) / num_threads;
 
-    uint32_t face_start = block_depth * t_id;
-    uint32_t face_end = block_depth * (t_id + 1);
+    uint32_t block_face_start = block_depth * t_id;
+    uint32_t block_face_end = block_depth * (t_id + 1);
+
+    uint32_t global_face_start = proc_rank * depth;
 
     /* TODO: I could try to improve cache reuse when computing the rhs
      * by tiling the sweep across the depth. */
 
     /* Solving each face of the domain, except the last. */
-    for (uint32_t i = face_start; i < face_end; ++i) {
+    for (uint32_t i = block_face_start; i < block_face_end; ++i) {
         for (uint32_t j = 0; j < height - VLEN; j += VLEN) {
             /* Solving each row of tiles, except the last. */
             uint64_t off = height * width * i + width * j;
@@ -1228,7 +897,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
-                            i, j, depth, height, width, timestep,
+                            global_face_start + i, j,
+                            depth, height, width, timestep,
                             INNER_FACE, INNER_ROW, tmp);
         }
         /* Solving each tile of the last row. */
@@ -1237,15 +907,15 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
-                        i, height - VLEN, depth, height, width, timestep,
+                        global_face_start + i, height - VLEN,
+                        depth, height, width, timestep,
                         INNER_FACE, LAST_ROW, tmp);
     }
-
 
     uint32_t num_remainder_faces = depth - 1 -
                                    block_depth * num_threads;
 
-    if (t_id == 0) {
+    if (t_id == 0 && proc_rank == (num_procs - 1)) {
         /* Solving the last face of the domain. */
         for (uint32_t j = 0; j < height - VLEN; j += VLEN) {
             uint64_t off = height * width * (depth - 1) + width * j;
@@ -1253,7 +923,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
-                            depth - 1, j, depth, height, width, timestep,
+                            global_face_start + depth - 1, j,
+                            depth, height, width, timestep,
                             LAST_FACE, INNER_ROW, tmp);
         }
         uint64_t off = height * width * (depth - 1) + width * (height - VLEN);
@@ -1261,7 +932,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
-                        depth - 1, height - VLEN, depth, height, width, timestep,
+                        global_face_start + depth - 1, height - VLEN,
+                        depth, height, width, timestep,
                         LAST_FACE, LAST_ROW, tmp);
 
     } else if (t_id < num_remainder_faces + 1) {
@@ -1273,7 +945,7 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
-                            depth - (t_id + 1), j,
+                            global_face_start + depth - (t_id + 1), j,
                             depth, height, width, timestep,
                             INNER_FACE, INNER_ROW, tmp);
         }
@@ -1284,192 +956,10 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
-                        depth - (t_id + 1), height - VLEN,
+                        global_face_start + depth - (t_id + 1), height - VLEN,
                         depth, height, width, timestep,
                         INNER_FACE, LAST_ROW, tmp);
     }
-}
-
-/* Solves the block diagonal system (I - wDxx)(u_n+1 - u_n) = f - u_n. */
-static void solve_Dxx_blocks(const ftype *restrict w,
-                             uint32_t depth,
-                             uint32_t height,
-                             uint32_t width,
-                             uint32_t timestep,
-                             /* tmp buffer of size 4 * (VLEN * width) */
-                             ftype *restrict tmp,
-                             ftype *restrict f_x,
-                             ftype *restrict f_y,
-                             ftype *restrict f_z,
-                             ftype *restrict u_x,
-                             ftype *restrict u_y,
-                             ftype *restrict u_z)
-{
-#ifdef AUTO_VEC
-    /* Solving for each row of the domain, one at a time. */
-    for (int i = 0; i < depth; ++i) {
-        for (int j = 0; j < height; ++j) {
-            /* Here we solve for a single block. */
-            uint64_t off = height * width * i + width * j;
-            solve_wDxx_tridiag(w + off, j, i, width, timestep, tmp,
-                               f_x + off, f_y + off, f_z + off,
-                               u_x + off, u_y + off, u_z + off);
-        }
-    }
-#else
-    /* TODO: just broadcast on the fly.. */
-    ZEROS = vbroadcast(0.0);
-    ONES = vbroadcast(1.0);
-    SIGN_MASK = vbroadcast(-0.0f);
-
-    ftype *restrict tmp_upp = tmp;
-    /* WARNING: Cache aliasing? */
-    ftype *restrict tmp_f_x = tmp + 1 * width * VLEN;
-    ftype *restrict tmp_f_y = tmp + 2 * width * VLEN;
-    ftype *restrict tmp_f_z = tmp + 3 * width * VLEN;
-
-    /* TODO: Why don't you write the solution directly to f?
-     * You can reduce the number of cache misses. ->
-     * No longer possible due to vel update fusion. */
-
-    /* TODO: Consider threading to parallelize outer loops,
-     * for tmp storage here, each thread would need its own
-     * arena, so blindly using OpenMP is not enough. */
-
-    for (uint32_t i = 0; i < depth; ++i) {
-        /* Solving in groups of VLEN rows. */
-        for (uint32_t j = 0; j < height; j += VLEN) {
-            uint64_t offset = height * width * i + width * j;
-
-            ftype __attribute__((aligned(32))) f_x_t[VLEN * VLEN];
-            ftype __attribute__((aligned(32))) f_y_t[VLEN * VLEN];
-            ftype __attribute__((aligned(32))) f_z_t[VLEN * VLEN];
-            ftype __attribute__((aligned(32))) w_t[VLEN * VLEN];
-            /* Load and transpose first tile. */
-            transpose_vtile(f_x + offset, width, VLEN, f_x_t);
-            transpose_vtile(f_y + offset, width, VLEN, f_y_t);
-            transpose_vtile(f_z + offset, width, VLEN, f_z_t);
-            transpose_vtile(w + offset, width, VLEN, w_t); 
-
-            /* Apply BCs on the first column of the tile. */
-            apply_left_bc(0, j, i, timestep,
-                          tmp_upp, tmp_f_x, tmp_f_y, tmp_f_z);
-            /* Reduce remaining columns of the tile. */
-            for (int k = 1; k < VLEN; ++k) {
-                gauss_reduce_vstrip(w_t + VLEN * k,
-                                    tmp_upp + VLEN * (k - 1),
-                                    f_x_t + VLEN * k,
-                                    f_y_t + VLEN * k,
-                                    f_z_t + VLEN * k,
-                                    tmp_f_x + VLEN * k,
-                                    tmp_f_y + VLEN * k,
-                                    tmp_f_z + VLEN * k);
-            }
-
-            /* Reduce remaining tiles except the last one. */
-            for (uint32_t tk = VLEN; tk < width - VLEN; tk += VLEN) {
-                /* Load and transpose next tile. */
-                transpose_vtile(f_x + offset + tk, width, VLEN, f_x_t);
-                transpose_vtile(f_y + offset + tk, width, VLEN, f_y_t);
-                transpose_vtile(f_z + offset + tk, width, VLEN, f_z_t);
-                transpose_vtile(w + offset + tk, width, VLEN, w_t);
-                for (uint32_t k = 0; k < VLEN; ++k) {
-                    gauss_reduce_vstrip(w_t + VLEN * k,
-                                        tmp_upp + VLEN * (tk + k - 1),
-                                        f_x_t + VLEN * k,
-                                        f_y_t + VLEN * k,
-                                        f_z_t + VLEN * k,
-                                        tmp_f_x + VLEN * (tk + k),
-                                        tmp_f_y + VLEN * (tk + k),
-                                        tmp_f_z + VLEN * (tk + k));
-                }
-            }
-
-            transpose_vtile(f_x + offset + width - VLEN, width, VLEN, f_x_t);
-            transpose_vtile(f_y + offset + width - VLEN, width, VLEN, f_y_t);
-            transpose_vtile(f_z + offset + width - VLEN, width, VLEN, f_z_t);
-            transpose_vtile(w + offset + width - VLEN, width, VLEN, w_t);
-            /* Reduce last tile except last column. */
-            for (int k = 0; k < VLEN - 1; ++k) {
-                gauss_reduce_vstrip(w_t + VLEN * k,
-                                    tmp_upp + VLEN * (width - VLEN + k - 1),
-                                    f_x_t + VLEN * k,
-                                    f_y_t + VLEN * k,
-                                    f_z_t + VLEN * k,
-                                    tmp_f_x + VLEN * (width - VLEN + k),
-                                    tmp_f_y + VLEN * (width - VLEN + k),
-                                    tmp_f_z + VLEN * (width - VLEN + k));
-            }
-
-            vftype u_x_prev, u_y_prev, u_z_prev;
-            /* Apply BCs on the right column. */
-            apply_right_bc(w_t + VLEN * (VLEN - 1),
-                           tmp_upp + VLEN * (width - 2),
-                           tmp_f_y + VLEN * (width - 2),
-                           tmp_f_z + VLEN * (width - 2),
-                           width - 1, j, i,
-                           timestep,
-                           /* Write solutions into f_t buffers,
-                            * we will reuse them for u_t buffers */
-                           f_x_t + VLEN * (VLEN - 1),
-                           f_y_t + VLEN * (VLEN - 1),
-                           f_z_t + VLEN * (VLEN - 1),
-                           &u_x_prev,
-                           &u_y_prev,
-                           &u_z_prev);
-
-            /* Reuse local buffers. */
-            ftype __attribute__((aligned(32))) *u_x_t = f_x_t;
-            ftype __attribute__((aligned(32))) *u_y_t = f_y_t;
-            ftype __attribute__((aligned(32))) *u_z_t = f_z_t;
-
-            /* Backward substitute last tile (last col already solved). */
-            for (int k = 1; k < VLEN; ++k) {
-                backward_sub_vstrip(
-                    tmp_f_x + VLEN * (width - 1 - k),
-                    tmp_f_y + VLEN * (width - 1 - k),
-                    tmp_f_z + VLEN * (width - 1 - k),
-                    tmp_upp + VLEN * (width - 1 - k),
-                    &u_x_prev,
-                    &u_y_prev,
-                    &u_z_prev,
-                    u_x_t + VLEN * (VLEN - 1 - k),
-                    u_y_t + VLEN * (VLEN - 1 - k),
-                    u_z_t + VLEN * (VLEN - 1 - k));
-            }
-            transpose_vtile_add(
-                u_x_t, VLEN, width, u_x + offset + width - VLEN);
-            transpose_vtile_add(
-                u_y_t, VLEN, width, u_y + offset + width - VLEN);
-            transpose_vtile_add(
-                u_z_t, VLEN, width, u_z + offset + width - VLEN);
-
-            /* Backward substitute one tile at a time. */
-            for (uint32_t tk = VLEN; tk < width; tk += VLEN) {
-                for (int k = 0; k < VLEN; ++k) {
-                    backward_sub_vstrip(
-                        tmp_f_x + VLEN * (width - 1 - (tk + k)),
-                        tmp_f_y + VLEN * (width - 1 - (tk + k)),
-                        tmp_f_z + VLEN * (width - 1 - (tk + k)),
-                        tmp_upp + VLEN * (width - 1 - (tk + k)),
-                        &u_x_prev,
-                        &u_y_prev,
-                        &u_z_prev,
-                        u_x_t + VLEN * (VLEN - 1 - k),
-                        u_y_t + VLEN * (VLEN - 1 - k),
-                        u_z_t + VLEN * (VLEN - 1 - k));
-                }
-                 /* Transpose and store. */
-                transpose_vtile_add(u_x_t, VLEN, width,
-                                    u_x + offset + width - VLEN - tk);
-                transpose_vtile_add(u_y_t, VLEN, width,
-                                    u_y + offset + width - VLEN - tk);
-                transpose_vtile_add(u_z_t, VLEN, width,
-                                    u_z + offset + width - VLEN - tk);
-            }
-        }
-    }
-#endif
 }
 
 static inline __attribute__((always_inline))
@@ -1607,7 +1097,8 @@ static void solve_Dyy_blocks(const ftype *restrict w,
                              ftype *restrict u_y,
                              ftype *restrict u_z,
                              uint32_t t_id,
-                             uint32_t num_threads)
+                             uint32_t num_threads,
+                             int proc_rank)
 {
     ZEROS = vbroadcast(0.0);
     ONES = vbroadcast(1.0);
@@ -1632,6 +1123,8 @@ static void solve_Dyy_blocks(const ftype *restrict w,
     /* WARNING: Assumes depth is multiple of num_threads. */
     uint32_t block_depth = depth / num_threads;
 
+    uint32_t global_face_start = proc_rank * depth;
+
     /* We solve for each face of the domain, one at a time. */
     for (int i = block_depth * t_id;
              i < block_depth * (t_id + 1); ++i) {
@@ -1640,7 +1133,7 @@ static void solve_Dyy_blocks(const ftype *restrict w,
 
         /* Apply BCs on the first row of the domain. */
         for (uint32_t k = 0; k < width; k += VLEN) {
-            apply_top_bc(k, 0, i, timestep, tmp + k,
+            apply_top_bc(k, 0, global_face_start + i, timestep, tmp + k,
                          tmp_f_x + k, tmp_f_y + k, tmp_f_z + k);
         }
         /* Gauss reduce the remaining face, one row at a time,
@@ -1668,7 +1161,7 @@ static void solve_Dyy_blocks(const ftype *restrict w,
                             tmp_f_z + width * (height - 2) + k,
                             f_x + face_offset + width * (height - 1) + k,
                             f_z + face_offset + width * (height - 1) + k,
-                            k, height - 1, i, timestep,
+                            k, height - 1, global_face_start + i, timestep,
                             tmp_u_x + k,
                             tmp_u_y + k,
                             tmp_u_z + k,
@@ -1760,7 +1253,9 @@ static void solve_Dzz_blocks(const ftype *restrict w,
                              ftype *restrict u_y,
                              ftype *restrict u_z,
                              uint32_t t_id,
-                             uint32_t num_threads)
+                             uint32_t num_threads,
+                             int proc_rank,
+                             int num_procs)
 {
     ZEROS = vbroadcast(0.0);
     ONES = vbroadcast(1.0);
@@ -1781,27 +1276,29 @@ static void solve_Dzz_blocks(const ftype *restrict w,
 
     /* TODO: Cache conflicts across rows? */
 
-    uint32_t row_start = block_height * t_id;
-    uint32_t row_end = block_height * (t_id + 1);
+    uint32_t block_row_start = block_height * t_id;
+    uint32_t block_row_end = block_height * (t_id + 1);
+
+    uint32_t global_face_start = proc_rank * depth;
 
     /* Apply BCs to the first face. */
-    for (uint32_t j = row_start; j < row_end; ++j) {
+    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
         for (uint32_t k = 0; k < width; k += VLEN) {
-            apply_front_bc(k, j, 0, timestep,
-                           tmp + width * (j - row_start) + k,
-                           tmp_f_x + width * (j - row_start) + k,
-                           tmp_f_y + width * (j - row_start) + k,
-                           tmp_f_z + width * (j - row_start) + k);
+            apply_front_bc(k, j, global_face_start, timestep,
+                           tmp + width * (j - block_row_start) + k,
+                           tmp_f_x + width * (j - block_row_start) + k,
+                           tmp_f_y + width * (j - block_row_start) + k,
+                           tmp_f_z + width * (j - block_row_start) + k);
         }
     }
 
     /* Gauss reduce the remaining domain, one face at a time,
      * except the last one. */
     for (uint32_t i = 1; i < depth - 1; ++i) {
-        for (uint32_t j = row_start; j < row_end; ++j) {
+        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
             uint64_t row_offset = height * width * i + width * j;
             uint64_t tmp_row_offset = block_height * width * i +
-                                      width * (j - row_start);
+                                      width * (j - block_row_start);
             gauss_reduce_row(w + row_offset,
                              f_x + row_offset,
                              f_y + row_offset,
@@ -1819,9 +1316,9 @@ static void solve_Dzz_blocks(const ftype *restrict w,
     }
     /* Apply BCs the last face, solving directly. */
     uint64_t face_offset = height * width * (depth - 1);
-    for (uint32_t j = row_start; j < row_end; ++j) {
+    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
         uint64_t tmp_row_offset = block_height * width * (depth - 2) +
-                                  width * (j - row_start);
+                                  width * (j - block_row_start);
         for (uint32_t k = 0; k < width; k += VLEN) {
             apply_back_bc(w + face_offset + width * j + k,
                           tmp + tmp_row_offset + k,
@@ -1829,10 +1326,10 @@ static void solve_Dzz_blocks(const ftype *restrict w,
                           tmp_f_y + tmp_row_offset + k,
                           f_x + face_offset + width * j + k,
                           f_y + face_offset + width * j + k,
-                          k, j, depth - 1, timestep,
-                          tmp_u_x + width * (j - row_start) + k,
-                          tmp_u_y + width * (j - row_start) + k,
-                          tmp_u_z + width * (j - row_start) + k,
+                          k, j, global_face_start + depth - 1, timestep,
+                          tmp_u_x + width * (j - block_row_start) + k,
+                          tmp_u_y + width * (j - block_row_start) + k,
+                          tmp_u_z + width * (j - block_row_start) + k,
                           u_x + face_offset + width * j + k,
                           u_y + face_offset + width * j + k,
                           u_z + face_offset + width * j + k);
@@ -1841,19 +1338,19 @@ static void solve_Dzz_blocks(const ftype *restrict w,
 
     /* Backward subsitute the remaining domain, one face at a time. */
     for (uint32_t i = 1; i < depth; ++i) {
-        for (uint32_t j = row_start; j < row_end; ++j) {
+        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
             uint64_t row_offset = height * width * (depth - i - 1) +
                                            width * j;
-            uint64_t tmp_row_offset = block_height * width *
-                                      (depth - i - 1) + width * (j - row_start);
+            uint64_t tmp_row_offset = block_height * width * (depth - i - 1) +
+                                      width * (j - block_row_start);
             backward_sub_row(tmp_f_x + tmp_row_offset, 
                              tmp_f_y + tmp_row_offset,
                              tmp_f_z + tmp_row_offset, 
                              tmp + tmp_row_offset,
                              width,
-                             tmp_u_x + width * (j - row_start),
-                             tmp_u_y + width * (j - row_start),
-                             tmp_u_z + width * (j - row_start),
+                             tmp_u_x + width * (j - block_row_start),
+                             tmp_u_y + width * (j - block_row_start),
+                             tmp_u_z + width * (j - block_row_start),
                              u_x + row_offset,
                              u_y + row_offset,
                              u_z + row_offset);
@@ -1883,7 +1380,8 @@ void momentum_solve(const_field porosity,
                     field3 velocity_Dyy,
                     field3 velocity_Dzz,
                     uint32_t timestep,
-                    Thread *thread)
+                    Thread *thread,
+                    DDecomp *ddecomp)
 {
     ArenaAllocator *arena = thread_get_arena(thread);
     arena_enter(arena);
@@ -1895,21 +1393,8 @@ void momentum_solve(const_field porosity,
     uint32_t t_id = thread->t_id;
     uint32_t num_threads = thread_get_array_size(thread);
 
-    /*
-    field3 rhs = field3_alloc(size, arena);
-
-    TIMEITN(compute_Dxx_rhs(
-        porosity, pressure, pressure_delta, velocity_Dxx.x,
-        velocity_Dxx.y, velocity_Dxx.z, velocity_Dyy.x,
-        velocity_Dyy.y, velocity_Dyy.z, velocity_Dzz.x,
-        velocity_Dzz.y, velocity_Dzz.z, size.depth, size.height,
-        size.width, timestep, rhs.x, rhs.y, rhs.z), 1);
-
-    TIMEITN(solve_Dxx_blocks(
-        gamma, size.depth, size.height, size.width, timestep,
-        tmp, rhs.x, rhs.y, rhs.z, velocity_Dxx.x, velocity_Dxx.y,
-        velocity_Dxx.z), 1);
-    */
+    int proc_rank = get_proc_rank(ddecomp->comm_z);
+    int num_procs = get_num_procs(ddecomp->comm_z);
 
     TIMER_CREATE(solve_momentum_Dxx_blocks_fused_rhs);
     TIMER_CREATE(solve_momentum_Dyy_blocks);
@@ -1923,7 +1408,7 @@ void momentum_solve(const_field porosity,
         velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
         velocity_Dzz.x, velocity_Dzz.y, velocity_Dzz.z,
         size.depth, size.height, size.width, timestep, tmp,
-        t_id, num_threads);
+        t_id, num_threads, proc_rank, num_procs);
 
     thread_wait_on_barrier(thread);
     TIMER_ELAPSED(solve_momentum_Dxx_blocks_fused_rhs, t_id == 0);
@@ -1934,7 +1419,7 @@ void momentum_solve(const_field porosity,
         gamma, size.depth, size.height, size.width, timestep,
         tmp, velocity_Dxx.x, velocity_Dxx.y, velocity_Dxx.z,
         velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
-        t_id, num_threads);
+        t_id, num_threads, proc_rank);
 
     thread_wait_on_barrier(thread);
     TIMER_ELAPSED(solve_momentum_Dyy_blocks, t_id == 0);
@@ -1945,35 +1430,10 @@ void momentum_solve(const_field porosity,
         gamma, size.depth, size.height, size.width, timestep,
         tmp, velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
         velocity_Dzz.x, velocity_Dzz.y, velocity_Dzz.z,
-        t_id, num_threads);
+        t_id, num_threads, proc_rank, num_procs);
 
     thread_wait_on_barrier(thread);
     TIMER_ELAPSED(solve_momentum_Dzz_blocks, t_id == 0);
-
-    /* Now enforce BCs on the final solution.
-     * WARNING: doesn't seem to affect convergence. */
-    /*
-    for (uint32_t i = 1; i < size.depth - 1; ++i) {
-        for (uint32_t j = 0; j < size.height; ++j) {
-            uint64_t idx = size.height * size.width * i + size.width * j;
-            velocity_x[idx] = velocity_Dxx.x[idx];
-            velocity_y[idx] = velocity_Dxx.y[idx];
-            velocity_z[idx] = velocity_Dxx.z[idx];
-            velocity_x[idx + size.width - 1] =
-                velocity_Dxx.x[idx + size.width - 1];
-        }
-
-        for (uint32_t k = 0; k < size.width; ++k) {
-            uint64_t idx = size.height * size.width * i + k;
-            velocity_x[idx] = velocity_Dyy.x[idx];
-            velocity_y[idx] = velocity_Dyy.y[idx];
-            velocity_z[idx] = velocity_Dyy.z[idx];
-
-            idx += size.width * (size.height - 1);
-            velocity_y[idx] = velocity_Dyy.y[idx];
-        }
-    }
-    */
 
     arena_exit(arena);
 }

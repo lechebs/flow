@@ -8,6 +8,7 @@
 #include "consts.h"
 #include "timeit.h"
 #include "thread-array.h"
+#include "ddecomp.h"
 
 #ifndef FLOAT
 
@@ -284,7 +285,8 @@ static void solve_Dxx_blocks(const ftype *restrict u_x,
                              ftype *restrict tmp,
                              ftype *restrict p,
                              uint32_t t_id,
-                             uint32_t num_threads)
+                             uint32_t num_threads,
+                             int proc_rank)
 {
 #ifdef AUTO_VEC
     printf("WARNING: solve_Dxx_blocks for AUTO_VEC not implemented\n");
@@ -305,18 +307,20 @@ static void solve_Dxx_blocks(const ftype *restrict u_x,
 
     /* WARNING: Assumes height is multiple of num_threads. */
     uint32_t block_height = height / num_threads;
-    /* Solve the first face, where div(u) = 0. */
-    for (uint32_t j = block_height * t_id;
-                  j < block_height * (t_id + 1); ++j) {
-        for (uint32_t tk = 0; tk < width; tk += VLEN) {
-            vstore(p + width * j + tk, vbroadcast(0));
+    if (proc_rank == 0) {
+        /* Solve the first face, where div(u) = 0. */
+        for (uint32_t j = block_height * t_id;
+                      j < block_height * (t_id + 1); ++j) {
+            for (uint32_t tk = 0; tk < width; tk += VLEN) {
+                vstore(p + width * j + tk, vbroadcast(0));
+            }
         }
     }
 
     /* WARNING: Assumes depth is multiple of num_threads. */
     uint32_t block_depth = depth / num_threads;
     /* Solve remaining faces. */
-    for (uint32_t i = block_depth * t_id + (t_id == 0); 
+    for (uint32_t i = block_depth * t_id + (t_id == 0 && proc_rank == 0);
                   i < block_depth * (t_id + 1); ++i) {
         /* Solve first tile row of the face. */
         solve_vtiles_row(u_x + height * width * i,
@@ -456,11 +460,11 @@ void solve_Dzz_blocks(uint32_t depth,
 
     /* WARNING: Assumes height is multiple of num_threads. */
     uint32_t block_height = height / num_threads;
-    uint32_t row_start = block_height * t_id;
-    uint32_t row_end = block_height * (t_id + 1);
+    uint32_t block_row_start = block_height * t_id;
+    uint32_t block_row_end = block_height * (t_id + 1);
 
     /* Apply BCs to first face. */
-    for (uint32_t j = row_start; j < row_end; ++j) {
+    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
         for (uint32_t k = 0; k < width; k += VLEN) {
             vstore(f + width * j + k,
                    vload(f + width * j + k) /
@@ -470,7 +474,7 @@ void solve_Dzz_blocks(uint32_t depth,
 
     for (uint32_t i = 1; i < depth; ++i) {
         ftype upp = tmp[i];
-        for (uint32_t j = row_start; j < row_end; ++j) {
+        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
             for (uint32_t k = 0; k < width; k += VLEN) {
                 gauss_reduce_scalar(height * width,
                                     upp,
@@ -479,7 +483,7 @@ void solve_Dzz_blocks(uint32_t depth,
         }
     }
 
-    for (uint32_t j = row_start; j < row_end; ++j) {
+    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
         for (uint32_t k = 0; k < width; k += VLEN) {
             /* Updating pressure in place. */
             uint64_t offset = height * width * (depth - 1) + width * j + k;
@@ -491,7 +495,7 @@ void solve_Dzz_blocks(uint32_t depth,
     /* Backward substitute. */
     for (uint32_t i = 1; i < depth; ++i) {
         ftype upp = tmp[depth - 1 - i];
-        for (uint32_t j = row_start; j < row_end; ++j) {
+        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
             for (uint32_t k = 0; k < width; k += VLEN) {
 
                 uint64_t offset = height * width * (depth - 1 - i) +
@@ -503,6 +507,8 @@ void solve_Dzz_blocks(uint32_t depth,
                 /* Updating pressure in place. */
                 vstore(p + offset, vadd(vload(p + offset),
                                         vload(f + offset)));
+                /* TODO: Use phi to hold pressure predictor instead
+                 * of computing it while building the rhs. */
             }
         }
     }
@@ -725,7 +731,8 @@ void pressure_solve(const_field3 velocity,
                     field pressure,
                     field pressure_delta,
                     uint32_t timestep,
-                    Thread *thread)
+                    Thread *thread,
+                    DDecomp *ddecomp)
 {
     ArenaAllocator *arena = thread_get_arena(thread);
     arena_enter(arena);
@@ -737,6 +744,9 @@ void pressure_solve(const_field3 velocity,
     uint32_t t_id = thread->t_id;
     uint32_t num_threads = thread_get_array_size(thread);
 
+    int proc_rank = get_proc_rank(ddecomp->comm_z);
+    int num_procs = get_num_procs(ddecomp->comm_z);
+
     TIMER_CREATE(solve_pressure_Dxx_blocks);
     TIMER_CREATE(solve_pressure_Dyy_blocks);
     TIMER_CREATE(solve_pressure_Dzz_blocks);
@@ -744,7 +754,8 @@ void pressure_solve(const_field3 velocity,
     TIMER_RESTART(solve_pressure_Dxx_blocks);
     solve_Dxx_blocks(velocity.x, velocity.y, velocity.z,
                      size.depth, size.height, size.width,
-                     tmp, pressure_delta, t_id, num_threads);
+                     tmp, pressure_delta, t_id, num_threads,
+                     proc_rank);
 
     thread_wait_on_barrier(thread);
     TIMER_ELAPSED(solve_pressure_Dxx_blocks, t_id == 0);

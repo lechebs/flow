@@ -17,9 +17,9 @@
 
 #define NUM_THREADS 4
 
-DEFINE_NU(1.0)
-DEFINE_DT(0.025)
-DEFINE_DX(M_PI / WIDTH)
+DEFINE_CONSTANT_NU(1.0)
+DEFINE_CONSTANT_DT(0.025)
+DEFINE_CONSTANT_DX(M_PI / WIDTH)
 
 DEFINE_CONSTANT_FORCING(0, 0, 0)
 
@@ -68,11 +68,12 @@ int main(void)
     ArenaAllocator arena;
     arena_init(&arena, 1lu << 34);
 
-    Solver *solver = solver_alloc(DEPTH, HEIGHT, WIDTH, &arena);
+    DDecomp *ddecomp = ddecomp_create(DEPTH, HEIGHT, WIDTH);
+
+    Solver *solver = solver_alloc(ddecomp, &arena);
     solver_init(solver, &arena);
 
-    field_size size = { WIDTH, HEIGHT, DEPTH };
-    OutputVTK *output = output_vtk_create(size, _DX, &arena);
+    OutputVTK *output = output_vtk_create(ddecomp->local_size, _DX, &arena);
 
     //output_vtk_attach_field(output, solver_get_porosity(solver),
     //                        "porosity", &arena);

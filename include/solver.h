@@ -5,15 +5,13 @@
 #include "field.h"
 #include "alloc.h"
 #include "thread-array.h"
+#include "ddecomp.h"
 
 struct Solver;
 
 typedef struct Solver Solver;
 
-Solver *solver_alloc(uint32_t domain_depth,
-                     uint32_t domain_height,
-                     uint32_t domain_width,
-                     ArenaAllocator *arena);
+Solver *solver_alloc(DDecomp *ddecomp, ArenaAllocator *arena);
 
 void solver_init(Solver *solver, ArenaAllocator *arena);
 

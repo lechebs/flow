@@ -8,11 +8,11 @@ BUILD_DIR = build
 FTYPE ?= DOUBLE
 VEC ?= EXPL
 
-DEFINE = -D$(FTYPE) -D$(VEC) -DTIMEITALL
+DEFINE = -D$(FTYPE) -D$(VEC)
 INCLUDE = -I$(INC_DIR) -I$(SRC_DIR)
 LIBS = -lm
 
-SOLVER_OBJS = solver.o momentum.o pressure.o output.o thread-array.o
+SOLVER_OBJS = solver.o momentum.o pressure.o output.o thread-array.o ddecomp.o
 UNIT_TEST_OBJS = unit-test.o ddecomp-test.o
 CONVERGENCE_TEST_OBJS = $(SOLVER_OBJS) convergence-test.o
 

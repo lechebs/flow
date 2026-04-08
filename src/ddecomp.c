@@ -2,6 +2,7 @@
 
 #include "alloc.h"
 #include "ftype.h"
+#include "field.h"
 
 static void tdma_solve(const ftype *restrict b,
                        ftype *restrict a,
@@ -68,4 +69,21 @@ static void tdma_mod_substitute(const ftype *restrict a,
         f[i] -= (u0 * a[i] + um * c[i]);
     }
     f[n - 1] = um;
+}
+
+DDecomp *ddecomp_create(uint32_t global_depth,
+                        uint32_t global_height,
+                        uint32_t global_width,
+                        ArenaAllocator *arena)
+{
+    DDecomp *ddecomp = arena_push_noalign(arena, sizeof(DDecomp));
+    ddecomp->comm_z = MPI_COMM_WORLD;
+
+    field_size size = { global_width, global_height, global_depth };
+    ddecomp->global_size = size;
+    /* WARNING: Assumes global_depth is multiple of num_procs. */
+    size.depth = size.depth / get_num_procs(ddecomp->comm_z);
+    ddecomp->local_size = size;
+
+    return ddecomp;
 }

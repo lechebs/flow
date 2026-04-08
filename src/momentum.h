@@ -4,6 +4,7 @@
 #include "field.h"
 #include "alloc.h"
 #include "thread-array.h"
+#include "ddecomp.h"
 
 void momentum_init(field_size size, field3 field);
 
@@ -16,6 +17,7 @@ void momentum_solve(const_field porosity,
                     field3 velocity_Dyy,
                     field3 velocity_Dzz,
                     uint32_t timestep,
-                    Thread *thread);
+                    Thread *thread,
+                    DDecomp *ddecomp);
 
 #endif

@@ -1,4 +1,5 @@
 #include <math.h>
+#include <mpi.h>
 
 #include "test.h"
 #include "ftype.h"
@@ -10,6 +11,7 @@
 #include "momentum.h"
 #include "pressure.h"
 #include "thread-array.h"
+#include "ddecomp.h"
 #include "convergence-test.h"
 
 DEFINE_DX(1.0)
@@ -46,7 +48,7 @@ static ftype get_forcing_x(ftype x, ftype y, ftype z, ftype t)
 
     return sin(x) * (-sin(y + t) * sin(z) +
                       cos(y + t) * sin(z) * _NU * (3 + 1.0 / _K) +
-                      cos(y + t) * cos(z) * -3 * _NU);
+                     cos(y + t) * cos(z) * -3 * _NU);
 }
 
 static ftype get_forcing_y(ftype x, ftype y, ftype z, ftype t)
@@ -69,6 +71,9 @@ static void compute_manufactured_solution(field_size size,
                                           uint32_t timestep,
                                           field3 dst)
 {
+    int proc_rank = get_proc_rank(MPI_COMM_WORLD);
+    uint32_t global_i_start = size.depth * proc_rank;
+
     ftype time = timestep * _DT;
     for (uint32_t i = 0; i < size.depth; ++i) {
         for (uint32_t j = 0; j < size.height; ++j) {
@@ -77,11 +82,11 @@ static void compute_manufactured_solution(field_size size,
                                size.width * j + k;
 
                 dst.x[idx] =
-                    get_man_u_x(_DX * k + _DX / 2, _DX * j, _DX * i, time);
+                    get_man_u_x(_DX * k + _DX / 2, _DX * j, _DX * (global_i_start + i), time);
                 dst.y[idx] =
-                    get_man_u_y(_DX * k, _DX * j + _DX / 2, _DX * i, time);
+                    get_man_u_y(_DX * k, _DX * j + _DX / 2, _DX * (global_i_start + i), time);
                 dst.z[idx] =
-                    get_man_u_z(_DX * k, _DX * j, _DX * i + _DX / 2, time);
+                    get_man_u_z(_DX * k, _DX * j, _DX * (global_i_start + i) + _DX / 2, time);
             }
         }
     }
@@ -93,6 +98,9 @@ static void compute_manufactured_pressure(field_size size,
 {
     ftype t = timestep * _DT - _DT / 2;
 
+    int proc_rank = get_proc_rank(MPI_COMM_WORLD);
+    uint32_t global_i_start = size.depth * proc_rank;
+
     for (uint32_t i = 0; i < size.depth; ++i) {
         for (uint32_t j = 0; j < size.height; ++j) {
             for (uint32_t k = 0; k < size.width; ++k) {
@@ -101,7 +109,7 @@ static void compute_manufactured_pressure(field_size size,
 
                 dst[idx] = 3 * _NU * cos(k * _DX)
                                    * cos(j * _DX + t)
-                                   * cos(i * _DX);
+                                   * cos((global_i_start + i) * _DX);
             }
         }
     }
@@ -117,6 +125,8 @@ struct SolverData {
     field3 eta;
     field3 zeta;
     field3 vel;
+    OutputVTK *output;
+    DDecomp *ddecomp;
 };
 
 static void *solve_brinkman(void *thread)
@@ -133,11 +143,19 @@ static void *solve_brinkman(void *thread)
     field3 eta = solver_data->eta;
     field3 zeta = solver_data->zeta;
     field3 vel = solver_data->vel;
+    OutputVTK *output = solver_data->output;
+    DDecomp *ddecomp = solver_data->ddecomp;
+
+    char output_file_name[32];
+    sprintf(output_file_name, "solution-%.4f-%d-%d.vtk",
+            _DT, get_proc_rank(ddecomp->comm_z), 0);
+    output_vtk_write(output, output_file_name, thread);
+
 
     for (uint32_t t = 1; t < num_timesteps + 1; ++t) {
 
         momentum_solve(porosity, gamma, pressure, phi,
-                       size, eta, zeta, vel, t, thread);
+                       size, eta, zeta, vel, t, thread, ddecomp);
 
         /*
         arena_enter(arena);
@@ -161,7 +179,8 @@ static void *solve_brinkman(void *thread)
         arena_exit(arena);
         */
 
-        pressure_solve(to_const_field3(vel), size, pressure, phi, t, thread);
+        pressure_solve(to_const_field3(vel), size,
+                       pressure, phi, t, thread, ddecomp);
  
         thread_wait_on_barrier(thread);
 
@@ -171,11 +190,10 @@ static void *solve_brinkman(void *thread)
                              size, pressure, 0.0, t);
         */
 
-        /*
         char output_file_name[32];
-        sprintf(output_file_name, "solution-%.4f-%d.vtk", _DT, t);
-        output_vtk_write(output, output_file_name);
-        */
+        sprintf(output_file_name, "solution-%.4f-%d-%d.vtk",
+                _DT, get_proc_rank(ddecomp->comm_z), t);
+        output_vtk_write(output, output_file_name, thread);
     }
 
     return 0;
@@ -197,7 +215,9 @@ DEF_TEST(test_convergence_time_splitting_brinkman,
     double T = 1.0;
     double dt = 0.1;
 
-    field_size size = { 64, 64, 64 };
+    DDecomp *ddecomp = ddecomp_create(64, 64, 64, arena);
+
+    field_size size = ddecomp->local_size;
     SET_DX(M_PI / (size.width - 0.5));
 
     for (int i = 0; i < num_samples; ++i) {
@@ -220,8 +240,8 @@ DEF_TEST(test_convergence_time_splitting_brinkman,
         field3_fill(size, 0, zeta);
         field3_fill(size, 0, vel);
 
-        field pressure = field_alloc(size, arena);
-        field phi = field_alloc(size, arena);
+        field pressure = field_alloc_pad(size, arena);
+        field phi = field_alloc_pad(size, arena);
 
         compute_manufactured_solution(size, 0, eta);
         compute_manufactured_solution(size, 0, zeta);
@@ -232,7 +252,6 @@ DEF_TEST(test_convergence_time_splitting_brinkman,
         field manufactured_pressure = field_alloc(size, arena);
         compute_manufactured_pressure(size, 0.5, manufactured_pressure);
 
-        /*
         OutputVTK *output = output_vtk_create(size, _DX, arena);
 
         output_vtk_attach_field(output, pressure, "pressure", arena);
@@ -240,11 +259,6 @@ DEF_TEST(test_convergence_time_splitting_brinkman,
                                 "man_pressure", arena);
         output_vtk_attach_field3(output, to_const_field3(vel),
                                  "velocity", arena);
-
-        char output_file_name[32];
-        sprintf(output_file_name, "solution-%.4f-%d.vtk", _DT, 0);
-        output_vtk_write(output, output_file_name);
-        */
 
         printf("%d/%d\n", i + 1, num_samples);
         uint32_t num_timesteps = round(T / _DT);
@@ -258,7 +272,9 @@ DEF_TEST(test_convergence_time_splitting_brinkman,
             phi,
             eta,
             zeta,
-            vel
+            vel,
+            output,
+            ddecomp
         };
 
         thread_array_set_shared_data(t_array, &data);
@@ -320,12 +336,16 @@ DEF_TEST(test_convergence_time_splitting_brinkman,
     arena_exit(arena);
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
+    MPI_Init(&argc, &argv);
+
     ArenaAllocator arena;
     arena_init(&arena, 1ul << 33);
 
-    RUN_TEST(test_convergence_time_splitting_brinkman, &arena, 4, 4);
+    RUN_TEST(test_convergence_time_splitting_brinkman, &arena, 2, 4);
 
     arena_destroy(&arena);
+
+    MPI_Finalize();
 }

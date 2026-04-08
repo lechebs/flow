@@ -6,9 +6,10 @@
 #include "consts.h"
 #include "timeit.h"
 #include "thread-array.h"
+#include "ddecomp.h"
 
 struct Solver {
-    field_size domain_size;
+    DDecomp *ddecomp;
     field porosity;
     field gamma;
     field pressure;
@@ -18,35 +19,29 @@ struct Solver {
     field3 velocity_Dzz;
 };
 
-Solver *solver_alloc(uint32_t domain_depth,
-                     uint32_t domain_height,
-                     uint32_t domain_width,
-                     ArenaAllocator *arena)
+Solver *solver_alloc(DDecomp *ddecomp, ArenaAllocator *arena)
 {
     Solver *solver = arena_push(arena, sizeof(Solver));
     memset(solver, 0, sizeof(Solver));
 
-    field_size domain_size;
-    domain_size.depth = domain_depth;
-    domain_size.height = domain_height;
-    domain_size.width = domain_width;
-    solver->domain_size = domain_size;
+    solver->ddecomp = ddecomp;
 
-    solver->porosity = field_alloc(domain_size, arena);
-    solver->gamma = field_alloc(domain_size, arena);
-    solver->pressure = field_alloc(domain_size, arena);
-    solver->pressure_delta = field_alloc(domain_size, arena);
-
-    solver->velocity_Dxx = field3_alloc_pad(domain_size, arena);
-    solver->velocity_Dyy = field3_alloc_pad(domain_size, arena);
-    solver->velocity_Dzz = field3_alloc_pad(domain_size, arena);
+    solver->porosity = field_alloc(ddecomp->local_size, arena);
+    solver->gamma = field_alloc(ddecomp->local_size, arena);
+    solver->pressure = field_alloc_pad(ddecomp->local_size, arena);
+    solver->pressure_delta = field_alloc_pad(ddecomp->local_size, arena);
+    /* TODO: Currently padding to handle front/back halos,
+     * use explicit pointers instead. */ 
+    solver->velocity_Dxx = field3_alloc_pad(ddecomp->local_size, arena);
+    solver->velocity_Dyy = field3_alloc_pad(ddecomp->local_size, arena);
+    solver->velocity_Dzz = field3_alloc_pad(ddecomp->local_size, arena);
 
     return solver;
 }
 
 void solver_init(Solver *solver, ArenaAllocator *arena)
 {
-    field_size domain_size = solver->domain_size;
+    field_size domain_size = solver->ddecomp->local_size;
 
     momentum_init(domain_size, solver->velocity_Dxx);
     momentum_init(domain_size, solver->velocity_Dyy);
@@ -86,8 +81,8 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
 
 void solver_set_porosity(Solver *solver, const ftype *src)
 {
-    field_copy(solver->domain_size, src, solver->porosity);
-    compute_gamma(src, solver->domain_size, solver->gamma);
+    field_copy(solver->ddecomp->local_size, src, solver->porosity);
+    compute_gamma(src, solver->ddecomp->local_size, solver->gamma);
 }
 
 void solver_step(Solver *solver, uint32_t timestep, Thread *thread)
@@ -96,19 +91,21 @@ void solver_step(Solver *solver, uint32_t timestep, Thread *thread)
                    solver->gamma,
                    solver->pressure,
                    solver->pressure_delta,
-                   solver->domain_size,
+                   solver->ddecomp->local_size,
                    solver->velocity_Dxx,
                    solver->velocity_Dyy,
                    solver->velocity_Dzz,
                    timestep,
-                   thread);
+                   thread,
+                   solver->ddecomp);
 
     pressure_solve(to_const_field3(solver->velocity_Dzz),
-                   solver->domain_size,
+                   solver->ddecomp->local_size,
                    solver->pressure,
                    solver->pressure_delta,
                    timestep,
-                   thread);
+                   thread,
+                   solver->ddecomp);
 }
 
 const_field3 solver_get_velocity(Solver *solver)
