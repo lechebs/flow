@@ -4,6 +4,8 @@
 #include <string.h>
 #include <math.h>
 
+#include <mpi.h>
+
 #include "alloc.h"
 #include "ftype.h"
 #include "utils.h"
@@ -50,7 +52,7 @@ static inline field field_alloc_pad(field_size size,
     field field = arena_push_count(arena, ftype, num_points) + face_size;
     /* Fill padding with zeros. */
     const_fmemset(field - face_size, 0, face_size);
-    const_fmemset(field + num_points - face_size, 0, face_size);
+    const_fmemset(field + num_points - 2 * face_size, 0, face_size);
 
     return field;
 }
@@ -170,7 +172,11 @@ static inline double field_l2_norm_diff(field_size size,
         }
     }
 
-    return sqrt(norm);
+    double norm_tot;
+    MPI_Allreduce(&norm, &norm_tot, 1, MPI_DOUBLE,
+                  MPI_SUM, MPI_COMM_WORLD);
+
+    return sqrt(norm_tot);
 }
 
 static inline double field3_l2_norm_diff(field_size size,
@@ -193,7 +199,11 @@ static inline double field3_l2_norm_diff(field_size size,
         }
     }
 
-    return sqrt(norm * dx * dx * dx);
+    double norm_tot;
+    MPI_Allreduce(&norm, &norm_tot, 1, MPI_DOUBLE,
+                  MPI_SUM, MPI_COMM_WORLD);
+
+    return sqrt(norm_tot * dx * dx * dx);
 }
 
 #endif

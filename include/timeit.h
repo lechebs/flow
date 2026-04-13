@@ -55,7 +55,7 @@ do {                                                          \
 
 #else
 
-#define TIMEITN(...) func_call;
+#define TIMEITN(func_call, ...) func_call;
 #define TIMER_CREATE(...) ;
 #define TIMER_RESTART(...) ;
 #define TIMER_ELAPSED(...) ;

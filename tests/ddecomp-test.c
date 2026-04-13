@@ -9,25 +9,11 @@
 
 #include "ddecomp.c"
 
-#ifdef FLOAT
-#define MPI_FTYPE MPI_FLOAT
-#else
-#define MPI_FTYPE MPI_DOUBLE
-#endif
-
 #define TOL 1e-8
 
 static ftype rand_uniform()
 {
     return ((ftype) rand()) / RAND_MAX;
-}
-
-static void allgather_diag_rd(ftype *dst,
-                              ftype d0,
-                              ftype dm)
-{
-    ftype buff[2] = { d0, dm };
-    MPI_Allgather(buff, 2, MPI_FTYPE, dst, 2, MPI_FTYPE, MPI_COMM_WORLD);
 }
 
 DEF_TEST(test_tdma_mod, ArenaAllocator *arena)

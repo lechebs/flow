@@ -1,14 +1,24 @@
 #include "ddecomp.h"
 
+#include <mpi.h>
+
 #include "alloc.h"
 #include "ftype.h"
 #include "field.h"
 
-static void tdma_solve(const ftype *restrict b,
-                       ftype *restrict a,
-                       ftype *restrict c,
-                       ftype *restrict f, /* f gets overwritten by u */
-                       uint32_t n)
+void allgather_diag_rd(ftype *dst,
+                       ftype d0,
+                       ftype dm)
+{
+    ftype buff[2] = { d0, dm };
+    MPI_Allgather(buff, 2, MPI_FTYPE, dst, 2, MPI_FTYPE, MPI_COMM_WORLD);
+}
+
+void tdma_solve(const ftype *restrict b,
+                ftype *restrict a,
+                ftype *restrict c,
+                ftype *restrict f, /* f gets overwritten by u */
+                uint32_t n)
 {
     f[0] /= b[0];
     c[0] /= b[0];
@@ -25,11 +35,11 @@ static void tdma_solve(const ftype *restrict b,
     }
 }
 
-static void tdma_mod_reduce(const ftype *restrict b,
-                            ftype *restrict a,
-                            ftype *restrict c,
-                            ftype *restrict f,
-                            uint32_t n)
+void tdma_mod_reduce(const ftype *restrict b,
+                     ftype *restrict a,
+                     ftype *restrict c,
+                     ftype *restrict f,
+                     uint32_t n)
 {
     #pragma GCC unroll(2)
     for (uint32_t i = 0; i < 2; ++i) {
@@ -57,12 +67,12 @@ static void tdma_mod_reduce(const ftype *restrict b,
     a[0] *= r;
 }
 
-static void tdma_mod_substitute(const ftype *restrict a,
-                                const ftype *restrict c,
-                                ftype *restrict f,
-                                ftype u0,
-                                ftype um, /* m=n-1 */
-                                uint32_t n)
+void tdma_mod_substitute(const ftype *restrict a,
+                         const ftype *restrict c,
+                         ftype *restrict f,
+                         ftype u0,
+                         ftype um, /* m=n-1 */
+                         uint32_t n)
 {
     f[0] = u0;
     for (uint32_t i = 1; i < n - 1; ++i) {

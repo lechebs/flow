@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <math.h>
+#include <assert.h>
 
 #include "pressure.h"
 
@@ -435,6 +436,117 @@ static void solve_Dyy_blocks(uint32_t depth,
     }
 }
 
+void solve_Dzz_blocks_ddecomp(uint32_t depth,
+                              uint32_t height,
+                              uint32_t width,
+                              /* phi is written to f */
+                              ftype *restrict f,
+                              ftype *restrict p,
+                              uint32_t t_id,
+                              uint32_t num_threads,
+                              int proc_rank,
+                              int num_procs,
+                              ArenaAllocator *arena)
+{
+    /* TODO: Optimize this crap. */
+
+    assert(num_threads == 1);
+
+    arena_enter(arena);
+
+    /* Allocating space for the local system. */
+    ftype *a = arena_push_count(arena, ftype, depth);
+    ftype *b = arena_push_count(arena, ftype, depth);
+    ftype *c = arena_push_count(arena, ftype, depth);
+    ftype *d = arena_push_count(arena, ftype, depth);
+
+    uint32_t n_rd = num_procs * 2;
+    /* Allocating space for the reduced system. */
+    ftype *a_rd = arena_push_count(arena, ftype, n_rd);
+    ftype *b_rd = arena_push_count(arena, ftype, n_rd);
+    ftype *c_rd = arena_push_count(arena, ftype, n_rd);
+    ftype *d_rd = arena_push_count(arena, ftype, n_rd);
+    /* Reduced system already has only 1s on the diagonal. */
+    for (uint32_t i = 0; i < n_rd; ++i) {
+        b_rd[i] = 1.0;
+    }
+
+    field_size size = { width, height, depth };
+
+    for (uint32_t j = 0; j < height; ++j) {
+        for (uint32_t k = 0; k < width; ++k) {
+
+            for (uint32_t i = 0; i < depth; ++i) {
+
+                /* Fill coefficient buffers. */
+                a[0] = (proc_rank > 0) ? (-1 / (_DX * _DX)) : 0;
+                b[0] = 1 + 2 / (_DX * _DX);
+                c[0] = (proc_rank > 0) ? (-1 / (_DX * _DX)) :
+                                         (-2 / (_DX * _DX));
+                d[0] = f[field_idx(size, k, j, 0)];
+
+                for (uint32_t i = 1; i < depth - 1; ++i) {
+                    a[i] = -1 / (_DX * _DX);
+                    b[i] = 1 + 2 / (_DX * _DX);
+                    c[i] = -1 / (_DX * _DX);
+
+                    d[i] = f[field_idx(size, k, j, i)];
+                }
+
+                a[depth - 1] = -1 / (_DX * _DX);
+                b[depth - 1] = (proc_rank < num_procs - 1) ?
+                               (1 + 2 / (_DX * _DX)) :
+                               (1 + 1 / (_DX * _DX));
+                c[depth - 1] = (proc_rank < num_procs - 1) ?
+                               (-1 / (_DX * _DX)) : 0;
+                d[depth - 1] = f[field_idx(size, k, j, depth - 1)];
+            }
+
+            /* Computing reduced system coefficients. */
+            tdma_mod_reduce(b, a, c, d, depth);
+
+            /* Assembling reduced system. For a non-trivial
+             * implementation, consider packing into a single
+             * message all of the coefficients. */
+            allgather_diag_rd(a_rd, a[0], a[depth - 1]);
+            allgather_diag_rd(c_rd, c[0], c[depth - 1]);
+            allgather_diag_rd(d_rd, d[0], d[depth - 1]);
+
+            /* Solving reduced system. */
+            tdma_solve(b_rd, a_rd, c_rd, d_rd, n_rd);
+
+            ftype u0 = d_rd[2 * proc_rank];
+            ftype um = d_rd[2 * proc_rank + 1];
+            /* Substituting edge unknowns into local system. */
+            tdma_mod_substitute(a, c, d, u0, um, depth);
+
+            /* Updating pressure. */
+            for (uint32_t i = 0; i < depth; ++i) {
+                f[field_idx(size, k, j, i)] = d[i];
+                p[field_idx(size, k, j, i)] += d[i];
+            }
+
+            /* Getting halo unknowns. */
+            ftype *p_f_halo = p - height * width;
+            ftype *p_b_halo = p + depth * height * width;
+
+            ftype *f_f_halo = f - height * width;
+            ftype *f_b_halo = f + depth * height * width;
+
+            if (proc_rank > 0) {
+                f_f_halo[field_idx(size, k, j, 0)] = d_rd[2 * proc_rank - 1];
+                p_f_halo[field_idx(size, k, j, 0)] += d_rd[2 * proc_rank - 1];
+            }
+            if (proc_rank < num_procs - 1) {
+                f_b_halo[field_idx(size, k, j, 0)] = d_rd[2 * proc_rank + 2];
+                p_b_halo[field_idx(size, k, j, 0)] += d_rd[2 * proc_rank + 2];
+            }
+        }
+    }
+
+    arena_exit(arena);
+}
+
 void solve_Dzz_blocks(uint32_t depth,
                       uint32_t height,
                       uint32_t width,
@@ -443,7 +555,8 @@ void solve_Dzz_blocks(uint32_t depth,
                       ftype *restrict f,
                       ftype *restrict p,
                       uint32_t t_id,
-                      uint32_t num_threads)
+                      uint32_t num_threads,
+                      ArenaAllocator *arena)
 {
     ftype upp = -2.0 / (2.0 + _DX * _DX); /* Left BC. */
     tmp[0] = upp;
@@ -758,22 +871,22 @@ void pressure_solve(const_field3 velocity,
                      proc_rank);
 
     thread_wait_on_barrier(thread);
-    TIMER_ELAPSED(solve_pressure_Dxx_blocks, t_id == 0);
+    TIMER_ELAPSED(solve_pressure_Dxx_blocks, t_id == 0 && proc_rank == 0);
 
     TIMER_RESTART(solve_pressure_Dyy_blocks);
     solve_Dyy_blocks(size.depth, size.height, size.width,
                      tmp, pressure_delta, t_id, num_threads);
 
     thread_wait_on_barrier(thread);
-    TIMER_ELAPSED(solve_pressure_Dyy_blocks, t_id == 0);
+    TIMER_ELAPSED(solve_pressure_Dyy_blocks, t_id == 0 && proc_rank == 0);
 
     TIMER_RESTART(solve_pressure_Dzz_blocks);
-    solve_Dzz_blocks(size.depth, size.height, size.width,
-                     tmp, pressure_delta, pressure,
-                     t_id, num_threads);
+    solve_Dzz_blocks_ddecomp(size.depth, size.height, size.width,
+                             pressure_delta, pressure,
+                             t_id, num_threads, proc_rank, num_procs, arena);
 
     thread_wait_on_barrier(thread);
-    TIMER_ELAPSED(solve_pressure_Dzz_blocks, t_id == 0);
+    TIMER_ELAPSED(solve_pressure_Dzz_blocks, t_id == 0 && proc_rank == 0);
 
     /*
     TIMEITN(solve_pressure_fused(size.depth, size.height, size.width,
@@ -783,82 +896,3 @@ void pressure_solve(const_field3 velocity,
 
     arena_exit(arena);
 }
-
-/* TODO: Remove this old debug code. */
-
-static ftype get_man_u_x(ftype x, ftype y, ftype z, ftype t)
-{
-    return sin(x) * cos(y + t) * sin(z);
-}
-
-static ftype get_man_u_y(ftype x, ftype y, ftype z, ftype t)
-{
-    return cos(x) * sin(y + t) * sin(z);
-}
-
-static ftype get_man_u_z(ftype x, ftype y, ftype z, ftype t)
-{
-    return 2 * cos(x) * cos(y + t) * cos(z);
-}
-
-void pressure_correct_rot(const_field3 velocity,
-                          const_field3 velocity_old,
-                          field_size size,
-                          field pressure,
-                          ftype chi,
-                          uint32_t timestep)
-{
-    /* Subtract 1/2 xhi nu div(u_n+1 + u_n) from pressure. */
-
-    ftype t = timestep * _DT;
-
-    for (uint32_t i = 0; i < size.depth; ++i) {
-        for (uint32_t j = 0; j < size.height; ++j) {
-            for (uint32_t k = 0; k < size.width; ++k) {
-                uint64_t idx = size.height * size.width * i +
-                               size.width * j + k;
-
-                ftype diff_x, diff_y, diff_z;
-
-                if (k > 0) {
-                    diff_x = velocity.x[idx] + velocity_old.x[idx] -
-                             velocity.x[idx - 1] - velocity_old.x[idx - 1];
-                } else {
-                    diff_x = -1.0 / 3.0 * (velocity.x[idx + 1] + velocity_old.x[idx + 1]) +
-                             3.0 * (velocity.x[idx] + velocity_old.x[idx])
-                             -8.0 / 3.0 * (get_man_u_x(0, j * _DX, i * _DX, t) +
-                                           get_man_u_x(0, j * _DX, i * _DX, t - _DT));
-                }
-
-                if (j > 0) {
-                    diff_y = velocity.y[idx] + velocity_old.y[idx] -
-                             velocity.y[idx - size.width] -
-                             velocity_old.y[idx - size.width];
-                } else {
-                    diff_y = -1.0 / 3.0 * (velocity.y[idx + size.width] +
-                                           velocity_old.y[idx + size.width]) +
-                             3.0 * (velocity.y[idx] + velocity_old.y[idx]) +
-                             -8.0 / 3.0 * (get_man_u_y(k * _DX, 0, i * _DX, t) +
-                                           get_man_u_y(k * _DX, 0, i * _DX, t - _DT));
-                }
-
-                if (i > 0) {
-                    diff_z = velocity.z[idx] + velocity_old.z[idx] -
-                             velocity.z[idx - size.height * size.width] -
-                             velocity_old.z[idx - size.height * size.width];
-                } else {
-                    diff_z = -1.0 / 3.0 * (velocity.z[idx + size.height * size.width] +
-                                           velocity_old.z[idx + size.height * size.width]) +
-                             3.0 * (velocity.z[idx] + velocity_old.z[idx]) +
-                             -8.0 / 3.0 * (get_man_u_z(k * _DX, j * _DX, 0, t) +
-                                           get_man_u_z(k * _DX, j * _DX, 0, t - _DT));
-                }
-
-                 pressure[idx] -= 0.5 * _NU * chi *
-                                  (diff_x + diff_y + diff_z) / _DX;
-            }
-        }
-    }
-}
-
-

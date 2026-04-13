@@ -90,6 +90,36 @@ static void compute_manufactured_solution(field_size size,
             }
         }
     }
+
+    ftype *front_halo_x = dst.x - size.height * size.width;
+    ftype *front_halo_y = dst.y - size.height * size.width;
+    ftype *front_halo_z = dst.z - size.height * size.width;
+
+    ftype *back_halo_x = dst.x + size.depth * size.height * size.width;
+    ftype *back_halo_y = dst.y + size.depth * size.height * size.width;
+    ftype *back_halo_z = dst.z + size.depth * size.height * size.width;
+
+    for (uint32_t j = 0; j < size.height; ++j) {
+        for (uint32_t k = 0; k < size.width; ++k) {
+            uint64_t halo_idx = size.width * j + k;
+
+            front_halo_x[halo_idx] =
+                get_man_u_x(_DX * k + _DX / 2, _DX * j, _DX * (global_i_start - 1), time);
+            front_halo_y[halo_idx] =
+                get_man_u_y(_DX * k, _DX * j + _DX / 2, _DX * (global_i_start - 1), time);
+            front_halo_z[halo_idx] =
+                get_man_u_z(_DX * k, _DX * j, _DX * (global_i_start - 1) + _DX / 2, time);
+
+            back_halo_x[halo_idx] =
+                get_man_u_x(_DX * k + _DX / 2, _DX * j, _DX * (global_i_start + size.depth), time);
+            back_halo_y[halo_idx] =
+                get_man_u_y(_DX * k, _DX * j + _DX / 2, _DX * (global_i_start + size.depth), time);
+            back_halo_z[halo_idx] =
+                get_man_u_z(_DX * k, _DX * j, _DX * (global_i_start + size.depth) + _DX / 2, time);
+        }
+    }
+
+
 }
 
 static void compute_manufactured_pressure(field_size size,
@@ -111,6 +141,23 @@ static void compute_manufactured_pressure(field_size size,
                                    * cos(j * _DX + t)
                                    * cos((global_i_start + i) * _DX);
             }
+        }
+    } 
+
+    ftype *front_halo = dst - size.height * size.width;
+    ftype *back_halo = dst + size.depth * size.height * size.width;
+
+    for (uint32_t j = 0; j < size.height; ++j) {
+        for (uint32_t k = 0; k < size.width; ++k) {
+            uint64_t idx = size.width * j + k;
+
+            front_halo[idx] = 3 * _NU * cos(k * _DX)
+                                * cos(j * _DX + t)
+                                * cos((global_i_start - 1) * _DX);
+
+            back_halo[idx] = 3 * _NU * cos(k * _DX)
+                               * cos(j * _DX + t)
+                               * cos((global_i_start + size.depth) * _DX);
         }
     }
 }
@@ -181,7 +228,23 @@ static void *solve_brinkman(void *thread)
 
         pressure_solve(to_const_field3(vel), size,
                        pressure, phi, t, thread, ddecomp);
- 
+
+       /*
+       ftype mean_pressure = 0;
+       ftype mean_phi = 0;
+        for (uint64_t i = 0; i < field_num_points(size); ++i) {
+            mean_pressure += pressure[i];
+            mean_phi += phi[i];
+        }
+        mean_pressure /= field_num_points(size);
+        mean_phi /= field_num_points(size);
+
+        for (uint64_t i = 0; i < field_num_points(size); ++i) {
+            pressure[i] -= mean_pressure;
+            phi[i] -= mean_phi;
+        }
+        */
+
         thread_wait_on_barrier(thread);
 
         /*
@@ -243,6 +306,8 @@ DEF_TEST(test_convergence_time_splitting_brinkman,
         field pressure = field_alloc_pad(size, arena);
         field phi = field_alloc_pad(size, arena);
 
+        /* WARNING: Fill halos with manufactured solution! */
+
         compute_manufactured_solution(size, 0, eta);
         compute_manufactured_solution(size, 0, zeta);
         compute_manufactured_solution(size, 0, vel);
@@ -260,7 +325,10 @@ DEF_TEST(test_convergence_time_splitting_brinkman,
         output_vtk_attach_field3(output, to_const_field3(vel),
                                  "velocity", arena);
 
-        printf("%d/%d\n", i + 1, num_samples);
+
+        if (get_proc_rank(MPI_COMM_WORLD) == 0) {
+            printf("%d/%d\n", i + 1, num_samples);
+        }
         uint32_t num_timesteps = round(T / _DT);
 
         struct SolverData data = {
@@ -325,10 +393,13 @@ DEF_TEST(test_convergence_time_splitting_brinkman,
     estimate_convergence_order(v_errors, dts, num_samples, v_orders);
     estimate_convergence_order(p_errors, dts, num_samples, p_orders);
 
-    printf("%.8f %e   --  %e   --\n", dts[0], v_errors[0], p_errors[0]);
-    for (int i = 1; i < num_samples; ++i) {
-        printf("%.8f %e %5.2f %e %5.2f\n",
-               dts[i], v_errors[i], v_orders[i], p_errors[i], p_orders[i]);
+    if (get_proc_rank(MPI_COMM_WORLD) == 0) {
+        printf("%.8f %e   --  %e   --\n", dts[0], v_errors[0], p_errors[0]);
+        for (int i = 1; i < num_samples; ++i) {
+            printf("%.8f %e %5.2f %e %5.2f\n",
+                   dts[i], v_errors[i], v_orders[i],
+                   p_errors[i], p_orders[i]);
+        }
     }
 
     thread_array_destroy(t_array);
@@ -343,7 +414,7 @@ int main(int argc, char *argv[])
     ArenaAllocator arena;
     arena_init(&arena, 1ul << 33);
 
-    RUN_TEST(test_convergence_time_splitting_brinkman, &arena, 2, 4);
+    RUN_TEST(test_convergence_time_splitting_brinkman, &arena, 3, 1);
 
     arena_destroy(&arena);
 

@@ -12,10 +12,6 @@ extern ftype _DX;
 #define DEFINE_DT(x) ftype _DT = x;
 #define DEFINE_DX(x) ftype _DX = x;
 
-#define DEFINE_CONSTANT_NU(x) const ftype _NU = x;
-#define DEFINE_CONSTANT_DT(x) const ftype _DT = x;
-#define DEFINE_CONSTANT_DX(x) const ftype _DX = x;
-
 #define SET_NU(x) _NU = x
 #define SET_DT(x) _DT = x
 #define SET_DX(x) _DX = x

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <mpi.h>
 
 #include "alloc.h"
 #include "boundary.h"
@@ -9,23 +10,23 @@
 #include "output.h"
 #include "thread-array.h"
 
-#define DEPTH 256
-#define HEIGHT 256
-#define WIDTH 256
+#define DEPTH 64
+#define HEIGHT 64
+#define WIDTH 64
 
 #define NUM_TIMESTEPS 10
 
-#define NUM_THREADS 4
+#define NUM_THREADS 1
 
-DEFINE_CONSTANT_NU(1.0)
-DEFINE_CONSTANT_DT(0.025)
-DEFINE_CONSTANT_DX(M_PI / WIDTH)
+DEFINE_NU(1.0)
+DEFINE_DT(0.025)
+DEFINE_DX(M_PI / WIDTH)
 
 DEFINE_CONSTANT_FORCING(0, 0, 0)
 
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_LEFT)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_RIGHT)
-DEFINE_CONSTANT_BC_U(0, 0.1, 0, BC_TOP)
+DEFINE_CONSTANT_BC_U(0, 0, 0.1, BC_TOP)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BOTTOM)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_FRONT)
 DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BACK)
@@ -44,31 +45,43 @@ static void *run_simulation(void *t_data)
     OutputVTK *output = sim_data->output;
 
     uint32_t t_id = ((Thread *) t_data)->t_id;
-    output_vtk_write(output, "output/solution-cavity-0.vtk", t_data);
+    int proc_rank = get_proc_rank(MPI_COMM_WORLD);
+
+    char output_file_name[64];
+    sprintf(output_file_name,
+            "output/solution-cavity-%d-0.vtk", proc_rank);
+    output_vtk_write(output, output_file_name, t_data);
     thread_wait_on_barrier(t_data);
 
     TIMER_CREATE(solver_step_aggregate);
+    TIMER_CREATE(output_vtk_write);
+
     for (int t = 1; t < NUM_TIMESTEPS + 1; ++t) {
         TIMER_RESTART(solver_step_aggregate);
         solver_step(solver, t, t_data);
 
-        char output_file_name[64];
-        sprintf(output_file_name, "output/solution-cavity-%d.vtk", t);
-        TIMEITN(output_vtk_write(output, output_file_name, t_data), 1);
+        TIMER_RESTART(output_vtk_write);
+        sprintf(output_file_name,
+                "output/solution-cavity-%d-%d.vtk", proc_rank, t);
+        output_vtk_write(output, output_file_name, t_data);
+        TIMER_ELAPSED(output_vtk_write, t_id == 0 && proc_rank == 0);
 
-        TIMER_ELAPSED(solver_step_aggregate, t_id == 0);
-        if (t_id == 0) { printf("\n"); }
+        TIMER_ELAPSED(solver_step_aggregate, t_id == 0 && proc_rank == 0);
+        if (t_id == 0 && proc_rank == 0) { printf("\n"); }
     }
 
     return 0;
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
+    /* TODO: Use MPI_init_thread when using multiple threads. */
+    MPI_Init(&argc, &argv);
+
     ArenaAllocator arena;
     arena_init(&arena, 1lu << 34);
 
-    DDecomp *ddecomp = ddecomp_create(DEPTH, HEIGHT, WIDTH);
+    DDecomp *ddecomp = ddecomp_create(DEPTH, HEIGHT, WIDTH, &arena);
 
     Solver *solver = solver_alloc(ddecomp, &arena);
     solver_init(solver, &arena);
@@ -90,6 +103,8 @@ int main(void)
     thread_array_destroy(t_array);
 
     arena_destroy(&arena);
+
+    MPI_Finalize();
 
     return 0;
 }

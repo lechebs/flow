@@ -6,6 +6,12 @@
 #include "alloc.h"
 #include "field.h"
 
+#ifdef FLOAT
+#define MPI_FTYPE MPI_FLOAT
+#else
+#define MPI_FTYPE MPI_DOUBLE
+#endif
+
 enum DDecompType { DDECOMP_SLAB_Z, DDECOMP_PENCIL_XY };
 
 extern const enum DDecompType _ddecomp_type;
@@ -37,6 +43,29 @@ static inline int get_proc_rank(MPI_Comm comm)
     MPI_Comm_rank(comm, &rank);
     return rank;
 }
+
+void allgather_diag_rd(ftype *dst,
+                       ftype d0,
+                       ftype dm);
+
+void tdma_solve(const ftype *restrict b,
+                ftype *restrict a,
+                ftype *restrict c,
+                ftype *restrict f, /* f gets overwritten by u */
+                uint32_t n);
+
+void tdma_mod_reduce(const ftype *restrict b,
+                     ftype *restrict a,
+                     ftype *restrict c,
+                     ftype *restrict f,
+                     uint32_t n);
+
+void tdma_mod_substitute(const ftype *restrict a,
+                         const ftype *restrict c,
+                         ftype *restrict f,
+                         ftype u0,
+                         ftype um, /* m=n-1 */
+                         uint32_t n);
 
 DDecomp *ddecomp_create(uint32_t global_depth,
                         uint32_t global_height,

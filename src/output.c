@@ -10,6 +10,7 @@
 
 #include "alloc.h"
 #include "field.h"
+#include "ddecomp.h"
 #include "thread-array.h"
 
 #define MAX_VTK_HEADER_SIZE 256
@@ -163,12 +164,14 @@ void output_vtk_write(OutputVTK *output,
             "BINARY\n"                     \
             "DATASET STRUCTURED_POINTS\n"  \
             "DIMENSIONS %u %u %u\n"        \
-            "ORIGIN 0 0 0\n"               \
+            "ORIGIN 0 0 %f\n"               \
             "SPACING %f %f %f\n"           \
             "POINT_DATA %lu\n",
             output->grid_size.width,
             output->grid_size.height,
             output->grid_size.depth,
+            get_proc_rank(MPI_COMM_WORLD) *
+                (output->grid_size.depth - 1) * output->grid_spacing,
             output->grid_spacing,
             output->grid_spacing,
             output->grid_spacing,

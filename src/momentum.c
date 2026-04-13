@@ -1,4 +1,5 @@
 #include <math.h>
+#include <assert.h>
 
 #include "momentum.h"
 
@@ -1239,13 +1240,14 @@ void apply_back_bc(const ftype *restrict w,
 
 }
 
+#define NUM_COMM_CHUNKS 4
+
 /* Solves the block diagonal system (I - wDzz)(u_n+1 - u_n) = f - u_n. */
 static void solve_Dzz_blocks(const ftype *restrict w,
                              uint32_t depth,
                              uint32_t height,
                              uint32_t width,
                              uint32_t timestep,
-                             ftype *restrict tmp,
                              ftype *restrict f_x,
                              ftype *restrict f_y,
                              ftype *restrict f_z,
@@ -1255,107 +1257,536 @@ static void solve_Dzz_blocks(const ftype *restrict w,
                              uint32_t t_id,
                              uint32_t num_threads,
                              int proc_rank,
-                             int num_procs)
+                             int num_procs,
+                             MPI_Comm comm,
+                             ArenaAllocator *restrict arena)
 {
-    ZEROS = vbroadcast(0.0);
-    ONES = vbroadcast(1.0);
-    SIGN_MASK = vbroadcast(-0.0f);
+    /* TODO: Handle num_threads > 1. */
+    assert(num_threads == 1);
+
+    arena_enter(arena);
 
     /* WARNING: Assumes height is multiple of num_threads. */
-    uint32_t block_height = height / num_threads;
+    const uint32_t block_height = height / num_threads;
 
-    ftype *restrict tmp_f_x = tmp + depth * block_height * width;
-    ftype *restrict tmp_f_y = tmp + depth * block_height * width * 2;
-    ftype *restrict tmp_f_z = tmp + depth * block_height * width * 3;
+    const uint64_t block_size = depth * block_height * width;
+    const uint64_t slice_size = block_height * width;
 
-    ftype *restrict tmp_u_x = tmp + depth * block_height * width * 4;
-    ftype *restrict tmp_u_y = tmp + depth * block_height * width * 4
-                                          + block_height * width;
-    ftype *restrict tmp_u_z = tmp + depth * block_height * width * 4
-                                          + block_height * width * 2;
+    const uint64_t send_size = 2 * slice_size;
+    const uint64_t inner_size = block_size - send_size;
 
-    /* TODO: Cache conflicts across rows? */
+    /* Buffers for the inner local systems coefficients. */
+    ftype *restrict low = arena_push_count(arena, ftype, inner_size);
+    ftype *restrict upp = arena_push_count(arena, ftype, inner_size);
+    ftype *restrict rhs_x = arena_push_count(arena, ftype, inner_size);
+    ftype *restrict rhs_y = arena_push_count(arena, ftype, inner_size);
+    ftype *restrict rhs_z = arena_push_count(arena, ftype, inner_size);
 
-    uint32_t block_row_start = block_height * t_id;
-    uint32_t block_row_end = block_height * (t_id + 1);
+    /* Buffers for the reduced local systems coefficients. */
+    ftype *restrict send_low = arena_push_count(arena, ftype, send_size);
+    ftype *restrict send_upp = arena_push_count(arena, ftype, send_size);
+    ftype *restrict send_rhs_x = arena_push_count(arena, ftype, send_size);
+    ftype *restrict send_rhs_y = arena_push_count(arena, ftype, send_size);
+    ftype *restrict send_rhs_z = arena_push_count(arena, ftype, send_size);
 
-    uint32_t global_face_start = proc_rank * depth;
+    const uint32_t block_row_start = block_height * t_id;
+    const uint32_t block_row_end = block_height * (t_id + 1);
 
-    /* Apply BCs to the first face. */
+    const uint32_t global_face_start = proc_rank * depth;
+
+    const int has_no_front_bc = proc_rank > 0;
+    const int has_back_bc = proc_rank == num_procs - 1;
+
+    /* TODO: Move sweeps code to individual functions. */
+
+    /* Start the forward sweep on the first slice of the block,
+     * applying front boundary conditions if needed. */
     for (uint32_t j = block_row_start; j < block_row_end; ++j) {
         for (uint32_t k = 0; k < width; k += VLEN) {
-            apply_front_bc(k, j, global_face_start, timestep,
-                           tmp + width * (j - block_row_start) + k,
-                           tmp_f_x + width * (j - block_row_start) + k,
-                           tmp_f_y + width * (j - block_row_start) + k,
-                           tmp_f_z + width * (j - block_row_start) + k);
+
+            /* Index wrt locally owned subdomain. */
+            uint64_t loc_idx = width * j + k;
+            /* Index wrt send system block. */
+            uint64_t send_idx = width * (j - block_row_start) + k;
+
+            vftype w_loc = vload(w + loc_idx) * has_no_front_bc;
+            vftype d_loc = 1 + 2 * w_loc;
+
+            vstore(send_low + send_idx, -w_loc / d_loc);
+            vstore(send_upp + send_idx, -w_loc / d_loc);
+
+            vftype bc_u_x, bc_u_y, bc_u_z;
+            _get_front_bc_u_delta(k, j, global_face_start, timestep,
+                                  &bc_u_x, &bc_u_y, &bc_u_z);
+
+            vftype rhs_x_loc = (vload(f_x + loc_idx) -
+                                vload(u_x + loc_idx)) * has_no_front_bc +
+                                              bc_u_x * !has_no_front_bc;
+            vftype rhs_y_loc = (vload(f_y + loc_idx) -
+                                vload(u_y + loc_idx)) * has_no_front_bc +
+                                              bc_u_y * !has_no_front_bc;
+            vftype rhs_z_loc = (vload(f_z + loc_idx) -
+                                vload(u_z + loc_idx)) * has_no_front_bc +
+                                              bc_u_z * !has_no_front_bc;
+
+            /* I think that using an if on proc_rank outside the two
+             * loops would basically perform the same. */
+            vstore(send_rhs_x + send_idx, rhs_x_loc / d_loc);
+            vstore(send_rhs_y + send_idx, rhs_y_loc / d_loc);
+            vstore(send_rhs_z + send_idx, rhs_z_loc / d_loc);
         }
     }
 
-    /* Gauss reduce the remaining domain, one face at a time,
-     * except the last one. */
+    /* Continue forward sweep on the second slice of the block. */
+    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+        for (uint32_t k = 0; k < width; k += VLEN) {
+
+            /* Index wrt locally owned subdomain. */
+            uint64_t loc_idx = height * width + width * j + k;
+            /* Index wrt inner block, ignoring first/last slices. */
+            uint64_t inner_idx = width * (j - block_row_start) + k;
+
+            vftype w_loc = vload(w + loc_idx);
+            vftype d_loc = 1 + 2 * w_loc;
+
+            vstore(low + inner_idx, -w_loc / d_loc);
+            vstore(upp + inner_idx, -w_loc / d_loc);
+
+            vftype rhs_x_loc = vload(f_x + loc_idx) - vload(u_x + loc_idx);
+            vftype rhs_y_loc = vload(f_y + loc_idx) - vload(u_y + loc_idx);
+            vftype rhs_z_loc = vload(f_z + loc_idx) - vload(u_z + loc_idx);
+
+            vstore(rhs_x + inner_idx, rhs_x_loc / d_loc);
+            vstore(rhs_y + inner_idx, rhs_y_loc / d_loc);
+            vstore(rhs_z + inner_idx, rhs_z_loc / d_loc);
+        }
+    }
+
+    /* Complete forward sweep on the rest of the block, except
+     * the last slice. */
+    for (uint32_t i = 2; i < depth - 1; ++i) {
+        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+            for (uint32_t k = 0; k < width; k += VLEN) {
+
+                uint64_t loc_idx = height * width * i + width * j + k;
+                uint64_t inner_idx = block_height * width * (i - 1) +
+                                     width * (j - block_row_start) + k;
+
+                vftype w_loc = vload(w + loc_idx);
+                vftype d_loc = 1 + 2 * w_loc;
+                vftype low_loc = -w_loc;
+                vftype upp_loc = -w_loc;
+
+                /* r = 1 / (b[i] - a[i] * c[i - 1]) */
+                vftype r_loc = (ftype) 1.0 /
+                    (d_loc - low_loc * vload(upp + inner_idx - slice_size));
+
+                /* a[i] *= r * -a[i - 1] */
+                vstore(low + inner_idx,
+                       r_loc * low_loc *
+                       -vload(low + inner_idx - slice_size));
+                /* c[i] *= r */
+                vstore(upp + inner_idx, r_loc * upp_loc);
+
+                vftype rhs_x_loc = vload(f_x + loc_idx) -
+                                   vload(u_x + loc_idx);
+                vftype rhs_y_loc = vload(f_y + loc_idx) -
+                                   vload(u_y + loc_idx);
+                vftype rhs_z_loc = vload(f_z + loc_idx) -
+                                   vload(u_z + loc_idx);
+
+                /* f[i] = r * (f[i] - f[i - 1] * a[i]) */
+                vstore(rhs_x + inner_idx,
+                       r_loc * (rhs_x_loc - low_loc *
+                                vload(rhs_x + inner_idx - slice_size)));
+                vstore(rhs_y + inner_idx,
+                       r_loc * (rhs_y_loc - low_loc *
+                                vload(rhs_y + inner_idx - slice_size)));
+                vstore(rhs_z + inner_idx,
+                       r_loc * (rhs_z_loc - low_loc *
+                                vload(rhs_z + inner_idx - slice_size)));
+            }
+        }
+    }
+
+    /* Complete forward sweep by processing last slice, applying
+     * back boundary conditions if needed. */
+    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+        for (uint32_t k = 0; k < width; k += VLEN) {
+
+            uint64_t loc_idx = height * width * (depth - 1) + width * j + k;
+            uint64_t send_idx = block_height * width +
+                                width * (j - block_row_start) + k;
+            uint64_t inner_idx = block_height * width * (depth - 2) +
+                                 width * (j - block_row_start) + k;
+
+            vftype w_loc = vload(w + loc_idx);
+
+            /* Only tangent component bc coefficients will be communicated.
+             * Nevertheless the last row of the reduced system has no impact
+             * on the values of the previous coefficients, since the backward
+             * sweep starts at the third-last row. */
+
+            /* Note that for tangent components, the equation with bc is:
+             * -4/3 w_n u_n-1 + (1 + 4 w_n) u_n = 8/3 w_n u_ex + f_n */
+
+            vftype d_loc = 1 + 2 * w_loc + 2 * w_loc * has_back_bc;
+            vftype low_loc = -w_loc - (ftype) 1.0 / 3 * w_loc * has_back_bc;
+            vftype upp_loc = -w_loc * !has_back_bc;
+
+            vftype bc_u_x, bc_u_y, bc_u_z;
+            _get_back_bc_u_delta(k, j, global_face_start + depth - 1,
+                                 timestep, &bc_u_x, &bc_u_y, &bc_u_z);
+
+            vftype rhs_x_loc = vload(f_x + loc_idx) -
+                               vload(u_x + loc_idx) +
+                               has_back_bc *
+                               (ftype) 8.0 / 3 * w_loc * bc_u_x;
+
+            vftype rhs_y_loc = vload(f_y + loc_idx) -
+                               vload(u_y + loc_idx) +
+                               has_back_bc *
+                               (ftype) 8.0 / 3 * w_loc * bc_u_y;
+
+            vftype rhs_z_loc = vload(f_z + loc_idx) -
+                               vload(u_z + loc_idx);
+
+            /* r = 1 / (b[i] - a[i] * c[i - 1]) */
+            vftype r_loc = (ftype) 1.0 /
+                (d_loc - low_loc * vload(upp + inner_idx - slice_size));
+
+            /* a[i] *= r * -a[i - 1] */
+            vstore(send_low + send_idx,
+                   r_loc * low_loc * -vload(low + inner_idx - slice_size));
+            /* c[i] *= r */
+            vstore(send_upp + send_idx, r_loc * upp_loc);
+
+            /* f[i] = r * (f[i] - f[i - 1] * a[i]) */
+            vstore(send_rhs_x + send_idx,
+                   r_loc * (rhs_x_loc - low_loc *
+                            vload(rhs_x + inner_idx - slice_size)));
+
+            vstore(send_rhs_y + send_idx,
+                   r_loc * (rhs_y_loc - low_loc *
+                            vload(rhs_y + inner_idx - slice_size)));
+
+            vstore(send_rhs_z + send_idx,
+                   !has_back_bc * r_loc * (rhs_z_loc -
+                       low_loc * vload(rhs_z + inner_idx - slice_size)) +
+                   has_back_bc * bc_u_z);
+        }
+    }
+
+    /* TODO: I could already start communicating the local back
+     * coefficients, since the backward sweep does not affect them.
+     * I guess this would go against having a contiguous buffer
+     * for the reduced system coefficients. */
+
+    /* Perform backward sweep on the block, except for the first slice. */
+    for (uint32_t i = 2; i < depth - 1; ++i) {
+        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+            for (uint32_t k = 0; k < width; k += VLEN) {
+
+                uint64_t inner_idx = block_height * width * (depth - 2 - i) +
+                                     width * (j - block_row_start) + k;
+
+                vftype upp_loc = vload(upp + inner_idx);
+
+                /* f[n - 1 - i] -= c[n - 1 - i] * f[n - i] */
+                vstore(rhs_x + inner_idx,
+                       vload(rhs_x + inner_idx) -
+                       vload(rhs_x + inner_idx + slice_size) * upp_loc);
+                vstore(rhs_y + inner_idx,
+                       vload(rhs_y + inner_idx) -
+                       vload(rhs_y + inner_idx + slice_size) * upp_loc);
+                vstore(rhs_z + inner_idx,
+                       vload(rhs_z + inner_idx) -
+                       vload(rhs_z + inner_idx + slice_size) * upp_loc);
+
+                /* a[n - 1 - i] -= c[n - 1 - i] * a[n - i] */
+                vstore(low + inner_idx,
+                       vload(low + inner_idx) -
+                       vload(low + inner_idx + slice_size) * upp_loc);
+
+                /* c[n - 1 - i] *= -c[n - i] */
+                vstore(upp + inner_idx,
+                       upp_loc * -vload(upp + inner_idx + slice_size));
+            }
+        }
+    }
+
+    /* Complete backward sweep on the first slice of the block. */
+    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+        for (uint32_t k = 0; k < width; k += VLEN) {
+
+            /* NOTE: The same idx can be used to access the coefficients
+             * of the second slice (first slice of the inner block). */
+            uint64_t send_idx = width * (j - block_row_start) + k;
+
+            vftype upp_loc = vload(send_upp + send_idx);
+            /* r = 1.0 / (1.0 - c[0] * a[1]) */
+            vftype r_loc = (ftype) 1.0 / ((ftype) 1.0 -
+                            upp_loc * vload(low + send_idx));
+
+            /* f[0] = r * (f[0] - c[0] * f[1]) */
+            vstore(send_rhs_x + send_idx,
+                   r_loc * (vload(send_rhs_x + send_idx) -
+                            vload(rhs_x + send_idx) * upp_loc));
+            vstore(send_rhs_y + send_idx,
+                   r_loc * (vload(send_rhs_y + send_idx) -
+                            vload(rhs_y + send_idx) * upp_loc));
+            vstore(send_rhs_z + send_idx,
+                   r_loc * (vload(send_rhs_z + send_idx) -
+                            vload(rhs_z + send_idx) * upp_loc));
+
+            /* a[0] *= r */
+            vstore(send_low + send_idx, r_loc * vload(send_low + send_idx));
+
+            /* c[0] *= r * -c[1] */
+            vstore(send_upp + send_idx,
+                   r_loc * upp_loc * -vload(upp + send_idx));
+        }
+    }
+
+    const uint64_t redu_size = num_procs * send_size;
+    /* Buffers for the reduced systems coefficients. */
+    ftype *restrict redu_low = arena_push_count(arena, ftype, redu_size);
+    ftype *restrict redu_upp = arena_push_count(arena, ftype, redu_size);
+    ftype *restrict redu_rhs_x = arena_push_count(arena, ftype, redu_size);
+    ftype *restrict redu_rhs_y = arena_push_count(arena, ftype, redu_size);
+    ftype *restrict redu_rhs_z = arena_push_count(arena, ftype, redu_size);
+
+    /* Assemble the reduced system by communicating with other procs. */
+
+    /* TODO: Partition block into sub-blocks, overlap sub-block sweeps
+     * with communication using MPI_Iallgather. */
+
+    /* WARNING: This works as long as num_threads = 1 */
+    MPI_Allgather(send_low, send_size, MPI_FTYPE,
+                  redu_low, send_size, MPI_FTYPE, comm);
+    MPI_Allgather(send_upp, send_size, MPI_FTYPE,
+                  redu_upp, send_size, MPI_FTYPE, comm);
+    MPI_Allgather(send_rhs_x, send_size, MPI_FTYPE,
+                  redu_rhs_x, send_size, MPI_FTYPE, comm);
+    MPI_Allgather(send_rhs_y, send_size, MPI_FTYPE,
+                  redu_rhs_y, send_size, MPI_FTYPE, comm);
+    MPI_Allgather(send_rhs_z, send_size, MPI_FTYPE,
+                  redu_rhs_z, send_size, MPI_FTYPE, comm);
+
+    /* Solve the reduced system, note that reduced system
+     * has 1s on the diagonal by construction. */
+
+    /* Forward sweep on the reduced system, except last slice. */
+    for (uint32_t i = 1; i < num_procs * 2 - 1; ++i) {
+        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+            for (uint32_t k = 0; k < width; k += VLEN) {
+
+                uint64_t redu_idx = block_height * width * i +
+                                    width * (j - block_row_start) + k;
+
+                vftype low_loc = vload(redu_low + redu_idx);
+                /* r = 1.0 / (b[i] - c[i - 1] * a[i]) */
+                vftype r_loc = (ftype) 1.0 / ((ftype) 1.0 - low_loc *
+                               vload(redu_upp + redu_idx - slice_size));
+
+                /* f[i] = r * (f[i] - f[i - 1] * a[i]) */
+                vstore(redu_rhs_x + redu_idx,
+                       r_loc * (vload(redu_rhs_x + redu_idx) - low_loc *
+                                vload(redu_rhs_x + redu_idx - slice_size)));
+                vstore(redu_rhs_y + redu_idx,
+                       r_loc * (vload(redu_rhs_y + redu_idx) - low_loc *
+                                vload(redu_rhs_y + redu_idx - slice_size)));
+                vstore(redu_rhs_z + redu_idx,
+                       r_loc * (vload(redu_rhs_z + redu_idx) - low_loc *
+                                vload(redu_rhs_z + redu_idx - slice_size)));
+
+                /* c[i] *= r */
+                vstore(redu_upp + redu_idx,
+                       r_loc * vload(redu_upp + redu_idx));
+            }
+        }
+    }
+
+    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+        for (uint32_t k = 0; k < width; k += VLEN) {
+
+            uint64_t redu_idx = block_height * width *
+                                (num_procs * 2 - 1) +
+                                width * (j - block_row_start) + k;
+
+            vftype low_loc = vload(redu_low + redu_idx);
+            /* r = 1.0 / (b[i] - c[i - 1] * a[i]) */
+            vftype r_loc = (ftype) 1.0 / ((ftype) 1.0 - low_loc *
+                           vload(redu_upp + redu_idx - slice_size));
+
+            /* f[i] = r * (f[i] - f[i - 1] * a[i]) */
+            vstore(redu_rhs_x + redu_idx,
+                   r_loc * (vload(redu_rhs_x + redu_idx) - low_loc *
+                            vload(redu_rhs_x + redu_idx - slice_size)));
+            vstore(redu_rhs_y + redu_idx,
+                   r_loc * (vload(redu_rhs_y + redu_idx) - low_loc *
+                            vload(redu_rhs_y + redu_idx - slice_size)));
+            /* Last row of the reduced system HAS back bc! */
+            //vstore(redu_rhs_z + redu_idx, vload(redu_rhs_z + redu_idx));
+        }
+    }
+
+    /* Backward sweep on the reduced system. */
+    for (uint32_t i = 1; i < num_procs * 2; ++i) {
+        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+            for (uint32_t k = 0; k < width; k += VLEN) {
+
+                uint64_t redu_idx = block_height * width *
+                                    (num_procs * 2 - 1 - i) +
+                                    width * (j - block_row_start) + k;
+
+                vftype upp_loc = vload(redu_upp + redu_idx);
+                /* f[n - 1 - i] -= c[n - 1 - i] * f[n - i] */
+                vstore(redu_rhs_x + redu_idx,
+                       vload(redu_rhs_x + redu_idx) - upp_loc *
+                       vload(redu_rhs_x + redu_idx + slice_size));
+                vstore(redu_rhs_y + redu_idx,
+                       vload(redu_rhs_y + redu_idx) - upp_loc *
+                       vload(redu_rhs_y + redu_idx + slice_size));
+                vstore(redu_rhs_z + redu_idx,
+                       vload(redu_rhs_z + redu_idx) - upp_loc *
+                       vload(redu_rhs_z + redu_idx + slice_size));
+            }
+        }
+    }
+
+    /* Substitute reduced system solution in the local system. */
+
+    /* NOTE: u is padded, so this is safe */
+    ftype *restrict u_x_front_halo = u_x - height * width;
+    ftype *restrict u_y_front_halo = u_y - height * width;
+    ftype *restrict u_z_front_halo = u_z - height * width;
+
+    if (proc_rank > 0) {
+        /* Update front halo. */
+        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+            for (uint32_t k = 0; k < width; k += VLEN) {
+
+                uint64_t halo_idx = width * j + k;
+                uint64_t redu_idx = block_height * width *
+                                    (2 * proc_rank - 1) +
+                                    width * (j - block_row_start) + k;
+
+                vstore(u_x_front_halo + halo_idx,
+                       vload(u_x_front_halo + halo_idx) +
+                       vload(redu_rhs_x + redu_idx));
+                vstore(u_y_front_halo + halo_idx,
+                       vload(u_y_front_halo + halo_idx) +
+                       vload(redu_rhs_y + redu_idx));
+                vstore(u_z_front_halo + halo_idx,
+                       vload(u_z_front_halo + halo_idx) +
+                       vload(redu_rhs_z + redu_idx));
+            }
+        }
+    }
+
+    /* Update first slice. */
+    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+        for (uint32_t k = 0; k < width; k += VLEN) {
+
+            uint64_t loc_idx = width * j + k;
+            uint64_t redu_idx = block_height * width * 2 * proc_rank +
+                                width * (j - block_row_start) + k;
+
+            vstore(u_x + loc_idx,
+                   vload(u_x + loc_idx) + vload(redu_rhs_x + redu_idx));
+            vstore(u_y + loc_idx,
+                   vload(u_y + loc_idx) + vload(redu_rhs_y + redu_idx));
+            vstore(u_z + loc_idx,
+                   vload(u_z + loc_idx) + vload(redu_rhs_z + redu_idx));
+        }
+    }
+
+    /* Update inner block. */
+    /* TODO: Consider sweeping backwards, last slices could
+     * still be in cache. */
+
     for (uint32_t i = 1; i < depth - 1; ++i) {
         for (uint32_t j = block_row_start; j < block_row_end; ++j) {
-            uint64_t row_offset = height * width * i + width * j;
-            uint64_t tmp_row_offset = block_height * width * i +
-                                      width * (j - block_row_start);
-            gauss_reduce_row(w + row_offset,
-                             f_x + row_offset,
-                             f_y + row_offset,
-                             f_z + row_offset,
-                             u_x + row_offset,
-                             u_y + row_offset,
-                             u_z + row_offset,
-                             width,
-                             block_height * width,
-                             tmp + tmp_row_offset,
-                             tmp_f_x + tmp_row_offset,
-                             tmp_f_y + tmp_row_offset,
-                             tmp_f_z + tmp_row_offset);
-        }
-    }
-    /* Apply BCs the last face, solving directly. */
-    uint64_t face_offset = height * width * (depth - 1);
-    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
-        uint64_t tmp_row_offset = block_height * width * (depth - 2) +
-                                  width * (j - block_row_start);
-        for (uint32_t k = 0; k < width; k += VLEN) {
-            apply_back_bc(w + face_offset + width * j + k,
-                          tmp + tmp_row_offset + k,
-                          tmp_f_x + tmp_row_offset + k,
-                          tmp_f_y + tmp_row_offset + k,
-                          f_x + face_offset + width * j + k,
-                          f_y + face_offset + width * j + k,
-                          k, j, global_face_start + depth - 1, timestep,
-                          tmp_u_x + width * (j - block_row_start) + k,
-                          tmp_u_y + width * (j - block_row_start) + k,
-                          tmp_u_z + width * (j - block_row_start) + k,
-                          u_x + face_offset + width * j + k,
-                          u_y + face_offset + width * j + k,
-                          u_z + face_offset + width * j + k);
+            for (uint32_t k = 0; k < width; k += VLEN) {
+
+                uint64_t loc_idx = height * width * i + width * j + k;
+                uint64_t inner_idx = block_height * width * (i - 1) + 
+                                     width * (j - block_row_start) + k;
+
+                uint64_t redu_front_idx =
+                    block_height * width * 2 * proc_rank +
+                    width * (j - block_row_start) + k;
+                uint64_t redu_back_idx =
+                    block_height * width * (2 * proc_rank + 1) +
+                    width * (j - block_row_start) + k;
+
+                vftype low_loc = vload(low + inner_idx);
+                vftype upp_loc = vload(upp + inner_idx);
+
+                /* f[i] -= (u0 * a[i] + um * c[i]) */
+                vstore(u_x + loc_idx,
+                       vload(u_x + loc_idx) + vload(rhs_x + inner_idx) -
+                       vload(redu_rhs_x + redu_front_idx) * low_loc -
+                       vload(redu_rhs_x + redu_back_idx) * upp_loc);
+                vstore(u_y + loc_idx,
+                       vload(u_y + loc_idx) + vload(rhs_y + inner_idx) -
+                       vload(redu_rhs_y + redu_front_idx) * low_loc -
+                       vload(redu_rhs_y + redu_back_idx) * upp_loc);
+                vstore(u_z + loc_idx,
+                       vload(u_z + loc_idx) + vload(rhs_z + inner_idx) -
+                       vload(redu_rhs_z + redu_front_idx) * low_loc -
+                       vload(redu_rhs_z + redu_back_idx) * upp_loc);
+            }
         }
     }
 
-    /* Backward subsitute the remaining domain, one face at a time. */
-    for (uint32_t i = 1; i < depth; ++i) {
-        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
-            uint64_t row_offset = height * width * (depth - i - 1) +
-                                           width * j;
-            uint64_t tmp_row_offset = block_height * width * (depth - i - 1) +
-                                      width * (j - block_row_start);
-            backward_sub_row(tmp_f_x + tmp_row_offset, 
-                             tmp_f_y + tmp_row_offset,
-                             tmp_f_z + tmp_row_offset, 
-                             tmp + tmp_row_offset,
-                             width,
-                             tmp_u_x + width * (j - block_row_start),
-                             tmp_u_y + width * (j - block_row_start),
-                             tmp_u_z + width * (j - block_row_start),
-                             u_x + row_offset,
-                             u_y + row_offset,
-                             u_z + row_offset);
+    /* Update last slice. */
+    for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+        for (uint32_t k = 0; k < width; k += VLEN) {
+
+            uint64_t loc_idx = height * width * (depth - 1) + width * j + k;
+            uint64_t redu_idx = block_height * width * (2 * proc_rank + 1) +
+                                width * (j - block_row_start) + k;
+
+            vstore(u_x + loc_idx,
+                   vload(u_x + loc_idx) + vload(redu_rhs_x + redu_idx));
+            vstore(u_y + loc_idx,
+                   vload(u_y + loc_idx) + vload(redu_rhs_y + redu_idx));
+            vstore(u_z + loc_idx,
+                   vload(u_z + loc_idx) + vload(redu_rhs_z + redu_idx));
         }
     }
+
+    /* NOTE: u is padded, so this is safe */
+    ftype *restrict u_x_back_halo = u_x + depth * height * width;
+    ftype *restrict u_y_back_halo = u_y + depth * height * width;
+    ftype *restrict u_z_back_halo = u_z + depth * height * width;
+
+    if (proc_rank < num_procs - 1) {
+        /* Update back halo, note that u is padded, so this is safe. */
+        for (uint32_t j = block_row_start; j < block_row_end; ++j) {
+            for (uint32_t k = 0; k < width; k += VLEN) {
+
+                uint64_t halo_idx = width * j + k;
+                uint64_t redu_idx = block_height * width *
+                                    (2 * proc_rank + 2) +
+                                    width * (j - block_row_start) + k;
+
+                vstore(u_x_back_halo + halo_idx,
+                       vload(u_x_back_halo + halo_idx) +
+                       vload(redu_rhs_x + redu_idx));
+                vstore(u_y_back_halo + halo_idx,
+                       vload(u_y_back_halo + halo_idx) +
+                       vload(redu_rhs_y + redu_idx));
+                vstore(u_z_back_halo + halo_idx,
+                       vload(u_z_back_halo + halo_idx) +
+                       vload(redu_rhs_z + redu_idx));
+            }
+        }
+    }
+
+    arena_exit(arena);
 }
 
 void momentum_init(field_size size, field3 field)
@@ -1366,7 +1797,7 @@ void momentum_init(field_size size, field3 field)
     for (uint32_t i = 0; i < size.depth; ++i) {
         for (uint32_t k = 0; k < size.width; ++k) {
             uint64_t idx = field_idx(size, k, 0, i);
-            field.x[idx] = 1.0;
+            field.z[idx] = 1.0;
         }
     }
 }
@@ -1386,12 +1817,15 @@ void momentum_solve(const_field porosity,
     ArenaAllocator *arena = thread_get_arena(thread);
     arena_enter(arena);
 
-    /* TODO: Check actual size needed when num_threads > 1. */
-    field_size tmp_size = { size.width, size.height, size.depth * 4 + 3 };
-    field tmp = field_alloc(tmp_size, arena);
-
     uint32_t t_id = thread->t_id;
     uint32_t num_threads = thread_get_array_size(thread);
+
+    /* TODO: Check actual size needed when num_threads > 1. */
+    field_size tmp_size = { size.width,
+                            size.height / num_threads,
+                            size.depth * 4 + 3 };
+
+    field tmp = field_alloc(tmp_size, arena);
 
     int proc_rank = get_proc_rank(ddecomp->comm_z);
     int num_procs = get_num_procs(ddecomp->comm_z);
@@ -1411,7 +1845,8 @@ void momentum_solve(const_field porosity,
         t_id, num_threads, proc_rank, num_procs);
 
     thread_wait_on_barrier(thread);
-    TIMER_ELAPSED(solve_momentum_Dxx_blocks_fused_rhs, t_id == 0);
+    TIMER_ELAPSED(solve_momentum_Dxx_blocks_fused_rhs,
+                  t_id == 0 && proc_rank == 0);
 
     TIMER_RESTART(solve_momentum_Dyy_blocks);
 
@@ -1422,18 +1857,19 @@ void momentum_solve(const_field porosity,
         t_id, num_threads, proc_rank);
 
     thread_wait_on_barrier(thread);
-    TIMER_ELAPSED(solve_momentum_Dyy_blocks, t_id == 0);
+    TIMER_ELAPSED(solve_momentum_Dyy_blocks, t_id == 0 && proc_rank == 0);
+
+    arena_exit(arena);
 
     TIMER_RESTART(solve_momentum_Dzz_blocks);
 
     solve_Dzz_blocks(
         gamma, size.depth, size.height, size.width, timestep,
-        tmp, velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
+        velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
         velocity_Dzz.x, velocity_Dzz.y, velocity_Dzz.z,
-        t_id, num_threads, proc_rank, num_procs);
+        t_id, num_threads, proc_rank, num_procs, ddecomp->comm_z, arena);
 
     thread_wait_on_barrier(thread);
-    TIMER_ELAPSED(solve_momentum_Dzz_blocks, t_id == 0);
+    TIMER_ELAPSED(solve_momentum_Dzz_blocks, t_id == 0 && proc_rank == 0);
 
-    arena_exit(arena);
 }
