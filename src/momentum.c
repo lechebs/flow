@@ -1211,6 +1211,10 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                                        uint32_t t_id,
                                        uint32_t num_threads)
 {
+    ZEROS = vbroadcast(0.0);
+    ONES = vbroadcast(1.0);
+    SIGN_MASK = vbroadcast(-0.0f);
+
     uint32_t block_depth = (depth - 1) / num_threads;
 
     uint32_t face_start = block_depth * t_id;

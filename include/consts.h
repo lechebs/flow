@@ -78,7 +78,7 @@ static inline void compute_gamma(const_field porosity,
     uint64_t num_points = field_num_points(size);
     for (uint64_t i = 0; i < num_points; ++i) {
         ftype k = porosity[i];
-        dst[i] = (k * _DT * _NU) / (2 * k + _DT * _NU) / (_DX * _DX);
+        dst[i] = (_DT * _NU) / (2 + _DT * _NU / k) / (_DX * _DX);
     }
 }
 
