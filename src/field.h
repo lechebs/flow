@@ -8,8 +8,8 @@
 #include "ftype.h"
 #include "utils.h"
 
-typedef ftype *restrict field;
-typedef const ftype *restrict const_field;
+typedef ftype *__restrict__ field;
+typedef const ftype *__restrict__ const_field;
 
 typedef struct { field x, y, z; } field3;
 typedef struct { const_field x, y, z; } const_field3;

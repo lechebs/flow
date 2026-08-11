@@ -4,6 +4,16 @@
 #include <immintrin.h>
 #include <stdint.h>
 
+#ifdef __NVCC__
+
+#ifdef FLOAT
+    typedef float ftype;
+#else
+    typedef double ftype;
+#endif
+
+#else
+
 #ifdef FLOAT
     typedef float ftype;
     typedef __m256 vftype;
@@ -248,4 +258,5 @@ void transpose_vtile_add(const ftype *restrict src,
 
 #endif
 
+#endif /* __CUDA_ARCH__ */
 

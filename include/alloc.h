@@ -15,6 +15,10 @@ struct ArenaAllocator {
 
 typedef struct ArenaAllocator ArenaAllocator;
 
+/* Arena for GPU memory? Well that's possible,
+ * but make sure you are aligning to 128 bytes or even 256 bytes
+ * to guarantee optimal coalescing. */
+
 static inline void arena_init_(ArenaAllocator *arena,
                                uint64_t size,
                                int hugetlb_flags)

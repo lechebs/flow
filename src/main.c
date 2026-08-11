@@ -9,6 +9,8 @@
 #include "output.h"
 #include "thread-array.h"
 
+#include "cuda/momentum.h"
+
 #define DEPTH 256
 #define HEIGHT 256
 #define WIDTH 256
@@ -44,7 +46,7 @@ static void *run_simulation(void *t_data)
     OutputVTK *output = sim_data->output;
 
     uint32_t t_id = ((Thread *) t_data)->t_id;
-    output_vtk_write(output, "output/solution-cavity-0.vtk", t_data);
+    //output_vtk_write(output, "output/solution-cavity-0.vtk", t_data);
     thread_wait_on_barrier(t_data);
 
     TIMER_CREATE(solver_step_aggregate);
@@ -54,10 +56,10 @@ static void *run_simulation(void *t_data)
 
         char output_file_name[64];
         sprintf(output_file_name, "output/solution-cavity-%d.vtk", t);
-        TIMEITN(output_vtk_write(output, output_file_name, t_data), 1);
+        //TIMEITN(output_vtk_write(output, output_file_name, t_data), 1);
 
         TIMER_ELAPSED(solver_step_aggregate, t_id == 0);
-        if (t_id == 0) { printf("\n"); }
+        TIMER_NEWLINE(t_id == 0);
     }
 
     return 0;
@@ -81,12 +83,20 @@ int main(void)
     output_vtk_attach_field3(output, solver_get_velocity(solver),
                              "velocity", &arena);
 
+#ifdef TARGET_CUDA
+    alloc_device_data(size);
+#endif
+
     ThreadArray *t_array = thread_array_create(NUM_THREADS, &arena);
     SimulationData data = { solver, output };
     thread_array_set_shared_data(t_array, &data);
 
     thread_array_run(t_array, run_simulation, &arena);
     thread_array_destroy(t_array);
+
+#ifdef TARGET_CUDA
+    free_device_data();
+#endif
 
     arena_destroy(&arena);
 

@@ -11,6 +11,10 @@
 #include "timeit.h"
 #include "thread-array.h"
 
+#ifdef TARGET_CUDA
+#include "cuda/momentum.h"
+#endif
+
 DECLARE_FORCING()
 
 DECLARE_BC_U(BC_LEFT)
@@ -1945,11 +1949,21 @@ void momentum_solve(const_field porosity,
 
     TIMER_RESTART(solve_momentum_Dzz_blocks);
 
+#ifdef TARGET_CUDA
+    if (t_id == 0) {
+        launch_momentum_solve_Dzz(
+            gamma, size.depth, size.height, size.width,
+            timestep, tmp, velocity_Dyy.x, velocity_Dyy.y,
+            velocity_Dyy.z, velocity_Dzz.x, velocity_Dzz.y,
+            velocity_Dzz.z);
+    }
+#else
     solve_Dzz_blocks(
         gamma, size.depth, size.height, size.width, timestep,
         tmp, velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
         velocity_Dzz.x, velocity_Dzz.y, velocity_Dzz.z,
         t_id, num_threads);
+#endif
 
     thread_wait_on_barrier(thread);
     TIMER_ELAPSED(solve_momentum_Dzz_blocks, t_id == 0);

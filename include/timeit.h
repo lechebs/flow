@@ -7,7 +7,7 @@
 
 #define TIMEIT(func_call) TIMEITN(func_call, 10)
 
-#ifdef TIMEITALL
+#ifdef TIMEIT_ON
 
 #define TIMEITN(func_call, avg_iter)                              \
 do {                                                              \
@@ -53,12 +53,20 @@ do {                                                          \
     }                                                         \
 } while (0)
 
+#define TIMER_NEWLINE(log_cond) \
+do {                            \
+    if (log_cond) {             \
+        printf("\n");           \
+    }                           \
+} while (0)
+
 #else
 
 #define TIMEITN(...) func_call;
 #define TIMER_CREATE(...) ;
 #define TIMER_RESTART(...) ;
 #define TIMER_ELAPSED(...) ;
+#define TIMER_NEWLINE(...) ;
 
 #endif
 
