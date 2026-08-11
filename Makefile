@@ -3,6 +3,7 @@ CFLAGS = -O3 -Wall -mavx2 -mfma -flto -g -Wno-stringop-truncation
 
 NVCC = nvcc
 CUDA_ARCH ?= sm_89
+NVCC_FLAGS = -arch=$(CUDA_ARCH) -lineinfo
 
 SRC_DIR = src
 INC_DIR = include
@@ -33,7 +34,6 @@ CONVERGENCE_TEST_OBJS = $(SOLVER_OBJS) convergence-test.o
 CUDA_OBJS = momentum.o
 
 solver: mkdir-build $(BUILD_DIR)/solver
-#tests: mkdir-build $(BUILD_DIR)/unit-test $(BUILD_DIR)/convergence-test $(BUILD_DIR)/convergence-pressure-test
 tests: mkdir-build $(BUILD_DIR)/convergence-test
 
 mkdir-build:
@@ -43,21 +43,26 @@ ifeq ($(TARGET), CUDA)
 endif
 
 LINKER = $(CC)
-SOLVER_OBJS_FULL = $(addprefix $(BUILD_DIR)/objs/, $(SOLVER_OBJS) main.o)
+
+SOLVER_OBJS_PATH = $(addprefix $(BUILD_DIR)/objs/, $(SOLVER_OBJS) main.o)
+CONVERGENCE_TEST_OBJS_PATH = $(addprefix $(BUILD_DIR)/objs/, $(CONVERGENCE_TEST_OBJS))
+
 ifeq ($(TARGET), CUDA)
 	LINKER = $(NVCC)
 	DEFINE += -DTARGET_CUDA
-	SOLVER_OBJS_FULL += $(addprefix $(BUILD_DIR)/objs/cuda/, $(CUDA_OBJS))
+	CUDA_OBJS_PATH = $(addprefix $(BUILD_DIR)/objs/cuda/, $(CUDA_OBJS))
+	SOLVER_OBJS_PATH += $(CUDA_OBJS_PATH)
+	CONVERGENCE_TEST_OBJS_PATH += $(CUDA_OBJS_PATH)
 endif
 
-$(BUILD_DIR)/solver: $(SOLVER_OBJS_FULL)
+$(BUILD_DIR)/solver: $(SOLVER_OBJS_PATH)
 	$(LINKER) $^ $(LIBS) -o $@
 
 $(BUILD_DIR)/unit-test: $(addprefix $(BUILD_DIR)/objs/, $(UNIT_TEST_OBJS))
 	$(CC) $^ $(LIBS) -o $@
 
-$(BUILD_DIR)/convergence-test: $(addprefix $(BUILD_DIR)/objs/, $(CONVERGENCE_TEST_OBJS))
-	$(CC) $^ $(LIBS) -o $@
+$(BUILD_DIR)/convergence-test: $(CONVERGENCE_TEST_OBJS_PATH)
+	$(LINKER) $^ $(LIBS) -o $@
 
 $(BUILD_DIR)/convergence-pressure-test: $(BUILD_DIR)/objs/convergence-pressure-test.o
 	$(CC) $^ $(LIBS) -o $@
@@ -69,7 +74,7 @@ $(BUILD_DIR)/objs/%.o: tests/%.c
 	$(CC) -c $^ $(CFLAGS) $(INCLUDE) $(DEFINE) -o $@
 
 $(BUILD_DIR)/objs/cuda/%.o: $(SRC_DIR)/cuda/%.cu
-	$(NVCC) -c $^ $(INCLUDE) $(DEFINE) -arch=$(CUDA_ARCH) -o $@
+	$(NVCC) -c $^ $(INCLUDE) $(DEFINE) $(NVCC_FLAGS) -o $@
 
 .PHONY: clean
 clean:

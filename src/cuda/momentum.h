@@ -10,6 +10,8 @@ extern "C" {
 void alloc_device_data(field_size domain_size);
 void free_device_data();
 
+void update_device_consts();
+
 /* Thank god I chose to keep the interface of these function
  * as simple as possible :D */
 void launch_momentum_solve_Dzz(const ftype *__restrict__ w,

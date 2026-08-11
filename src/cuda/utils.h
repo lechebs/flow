@@ -13,7 +13,7 @@ do {                                           \
 do {                                           \
     cudaError_t err = api_call;                \
     if (err != cudaSuccess) {                  \
-        printf("CUDA error at %s:%d (%s: %s)", \
+        printf("%s:%d %s: %s\n",               \
                __FILE__,                       \
                __LINE__,                       \
                cudaGetErrorName(err),          \

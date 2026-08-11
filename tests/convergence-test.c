@@ -12,6 +12,8 @@
 #include "thread-array.h"
 #include "convergence-test.h"
 
+#include "cuda/momentum.h"
+
 DEFINE_DX(1.0)
 DEFINE_DT(1.0)
 DEFINE_NU(1.0)
@@ -228,12 +230,19 @@ DEF_TEST(test_convergence_space,
     double dt = 1e-6;
 
     SET_DT(dt);
+#ifdef TARGET_CUDA
+    update_device_consts();
+#endif
 
     for (int i = 0; i < num_samples; ++i) {
         arena_enter(arena);
 
         field_size size = { 16 << i, 16 << i, 16 << i };
         SET_DX(1.0 / (size.width - 0.5));
+#ifdef TARGET_CUDA
+        update_device_consts();
+        alloc_device_data(size);
+#endif
 
         dxs[i] = _DX;
 
@@ -334,6 +343,10 @@ DEF_TEST(test_convergence_space,
                                          pressure,
                                          manufactured_pressure);
 
+#ifdef TARGET_CUDA
+        free_device_data();
+#endif
+
         arena_exit(arena);
     }
 
@@ -371,11 +384,18 @@ DEF_TEST(test_convergence_time,
 
     field_size size = { 64, 64, 64 };
     SET_DX(M_PI / (size.width - 0.5));
+#ifdef TARGET_CUDA
+    update_device_consts();
+    alloc_device_data(size);
+#endif
 
     for (int i = 0; i < num_samples; ++i) {
         arena_enter(arena);
 
         SET_DT(dt);
+#ifdef TARGET_CUDA
+        update_device_consts();
+#endif
 
         field porosity = field_alloc(size, arena);
         field gamma = field_alloc(size, arena);
@@ -469,6 +489,10 @@ DEF_TEST(test_convergence_time,
 
         arena_exit(arena);
     }
+
+#ifdef TARGET_CUDA
+    free_device_data();
+#endif
 
     double *v_orders = arena_push_count(arena, double, num_samples);
     double *p_orders = arena_push_count(arena, double, num_samples);

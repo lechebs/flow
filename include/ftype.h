@@ -8,8 +8,10 @@
 
 #ifdef FLOAT
     typedef float ftype;
+    typedef float3 ftype3;
 #else
     typedef double ftype;
+    typedef double3 ftype3;
 #endif
 
 #else
