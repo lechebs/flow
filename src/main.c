@@ -13,9 +13,7 @@
 #define HEIGHT 256
 #define WIDTH 256
 
-#define NUM_TIMESTEPS 10
-
-#define NUM_THREADS 4
+#define NUM_TIMESTEPS 200
 
 DEFINE_NU(1.0)
 DEFINE_DT(0.025)
@@ -44,7 +42,7 @@ static void *run_simulation(void *t_data)
     OutputVTK *output = sim_data->output;
 
     uint32_t t_id = ((Thread *) t_data)->t_id;
-    output_vtk_write(output, "output/solution-cavity-0.vtk", t_data);
+    //output_vtk_write(output, "output/solution-cavity-0.vtk", t_data);
     thread_wait_on_barrier(t_data);
 
     TIMER_CREATE(solver_step_aggregate);
@@ -54,10 +52,10 @@ static void *run_simulation(void *t_data)
 
         char output_file_name[64];
         sprintf(output_file_name, "output/solution-cavity-%d.vtk", t);
-        TIMEITN(output_vtk_write(output, output_file_name, t_data), 1);
+        //TIMEITN(output_vtk_write(output, output_file_name, t_data), 1);
 
         TIMER_ELAPSED(solver_step_aggregate, t_id == 0);
-        if (t_id == 0) { printf("\n"); }
+        TIMER_NEWLINE(t_id == 0 && t % TIMER_LOG_FREQ == 0);
     }
 
     return 0;
@@ -81,7 +79,10 @@ int main(void)
     output_vtk_attach_field3(output, solver_get_velocity(solver),
                              "velocity", &arena);
 
-    ThreadArray *t_array = thread_array_create(NUM_THREADS, &arena);
+    ThreadArray *t_array = thread_array_create(0, &arena);
+
+    printf("num_threads=%d\n\n", t_array->num_threads);
+
     SimulationData data = { solver, output };
     thread_array_set_shared_data(t_array, &data);
 

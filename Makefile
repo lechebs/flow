@@ -8,9 +8,16 @@ BUILD_DIR = build
 FTYPE ?= DOUBLE
 VEC ?= EXPL
 
-DEFINE = -D$(FTYPE) -D$(VEC) -DTIMEITALL
+TIMER ?=
+TIMER_FREQ ?= 1
+
+DEFINE = -D$(FTYPE) -D$(VEC) -DTIMER_LOG_FREQ=$(TIMER_LOG_FREQ)
 INCLUDE = -I$(INC_DIR) -I$(SRC_DIR)
 LIBS = -lm
+
+ifeq ($(TIMER), ON)
+	DEFINE += -DTIMER
+endif
 
 SOLVER_OBJS = solver.o momentum.o pressure.o output.o thread-array.o
 UNIT_TEST_OBJS = unit-test.o momentum-test.o pressure-test.o

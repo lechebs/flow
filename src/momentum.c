@@ -1773,94 +1773,114 @@ static void solve_Dzz_blocks(const ftype *restrict w,
     /* WARNING: Assumes height is multiple of num_threads. */
     uint32_t block_height = height / num_threads;
 
-    ftype *restrict tmp_f_x = tmp + depth * block_height * width;
-    ftype *restrict tmp_f_y = tmp + depth * block_height * width * 2;
-    ftype *restrict tmp_f_z = tmp + depth * block_height * width * 3;
+    /* TODO: This should be computed based on width to make sure that
+     * entire poges (4KB) are read along y. Perhaps more than one page
+     * to guarantee good prefetching behavior. Too big and the slices
+     * exceed L3 and there's no point in blocking. Note that the effect
+     * is negligible when using more threads since each thread already
+     * deals with a smaller working set. */
+    uint32_t sub_block_height = block_height > 8 ? 8 : block_height;
 
-    ftype *restrict tmp_u_x = tmp + depth * block_height * width * 4;
-    ftype *restrict tmp_u_y = tmp + depth * block_height * width * 4
-                                          + block_height * width;
-    ftype *restrict tmp_u_z = tmp + depth * block_height * width * 4
-                                          + block_height * width * 2;
+    ftype *restrict tmp_f_x = tmp + depth * sub_block_height * width;
+    ftype *restrict tmp_f_y = tmp + depth * sub_block_height * width * 2;
+    ftype *restrict tmp_f_z = tmp + depth * sub_block_height * width * 3;
+
+    ftype *restrict tmp_u_x = tmp + depth * sub_block_height * width * 4;
+    ftype *restrict tmp_u_y = tmp + depth * sub_block_height * width * 4
+                                          + sub_block_height * width;
+    ftype *restrict tmp_u_z = tmp + depth * sub_block_height * width * 4
+                                          + sub_block_height * width * 2;
 
     /* TODO: Cache conflicts across rows? */
 
-    uint32_t row_start = block_height * t_id;
-    uint32_t row_end = block_height * (t_id + 1);
+    uint32_t block_row_start = block_height * t_id;
+    uint32_t block_row_end = block_height * (t_id + 1);
 
-    /* Apply BCs to the first face. */
-    for (uint32_t j = row_start; j < row_end; ++j) {
-        for (uint32_t k = 0; k < width; k += VLEN) {
-            apply_front_bc(k, j, 0, timestep,
-                           tmp + width * (j - row_start) + k,
-                           tmp_f_x + width * (j - row_start) + k,
-                           tmp_f_y + width * (j - row_start) + k,
-                           tmp_f_z + width * (j - row_start) + k);
+    /* WARNING: Make sure block_height is > sub_block_height. */
+
+    for (uint32_t row_start = block_row_start;
+                  row_start < block_row_end; row_start += sub_block_height) {
+
+        uint32_t row_end = row_start + sub_block_height;
+        if (row_end > height) {
+            row_end = height;
         }
-    }
 
-    /* Gauss reduce the remaining domain, one face at a time,
-     * except the last one. */
-    for (uint32_t i = 1; i < depth - 1; ++i) {
+        /* Apply BCs to the first face. */
         for (uint32_t j = row_start; j < row_end; ++j) {
-            uint64_t row_offset = height * width * i + width * j;
-            uint64_t tmp_row_offset = block_height * width * i +
+            for (uint32_t k = 0; k < width; k += VLEN) {
+                apply_front_bc(k, j, 0, timestep,
+                               tmp + width * (j - row_start) + k,
+                               tmp_f_x + width * (j - row_start) + k,
+                               tmp_f_y + width * (j - row_start) + k,
+                               tmp_f_z + width * (j - row_start) + k);
+            }
+        }
+
+        /* Gauss reduce the remaining domain, one face at a time,
+         * except the last one. */
+        for (uint32_t i = 1; i < depth - 1; ++i) {
+            for (uint32_t j = row_start; j < row_end; ++j) {
+                uint64_t row_offset = height * width * i + width * j;
+                uint64_t tmp_row_offset = sub_block_height * width * i +
+                                          width * (j - row_start);
+                gauss_reduce_row(w + row_offset,
+                                 f_x + row_offset,
+                                 f_y + row_offset,
+                                 f_z + row_offset,
+                                 u_x + row_offset,
+                                 u_y + row_offset,
+                                 u_z + row_offset,
+                                 width,
+                                 sub_block_height * width,
+                                 tmp + tmp_row_offset,
+                                 tmp_f_x + tmp_row_offset,
+                                 tmp_f_y + tmp_row_offset,
+                                 tmp_f_z + tmp_row_offset);
+            }
+        }
+        /* Apply BCs the last face, solving directly. */
+        uint64_t face_offset = height * width * (depth - 1);
+        for (uint32_t j = row_start; j < row_end; ++j) {
+            uint64_t tmp_row_offset = sub_block_height * width * (depth - 2) +
                                       width * (j - row_start);
-            gauss_reduce_row(w + row_offset,
-                             f_x + row_offset,
-                             f_y + row_offset,
-                             f_z + row_offset,
-                             u_x + row_offset,
-                             u_y + row_offset,
-                             u_z + row_offset,
-                             width,
-                             block_height * width,
-                             tmp + tmp_row_offset,
-                             tmp_f_x + tmp_row_offset,
-                             tmp_f_y + tmp_row_offset,
-                             tmp_f_z + tmp_row_offset);
+            for (uint32_t k = 0; k < width; k += VLEN) {
+                apply_back_bc(w + face_offset + width * j + k,
+                              tmp + tmp_row_offset + k,
+                              tmp_f_x + tmp_row_offset + k,
+                              tmp_f_y + tmp_row_offset + k,
+                              f_x + face_offset + width * j + k,
+                              f_y + face_offset + width * j + k,
+                              k, j, depth - 1, timestep,
+                              tmp_u_x + width * (j - row_start) + k,
+                              tmp_u_y + width * (j - row_start) + k,
+                              tmp_u_z + width * (j - row_start) + k,
+                              u_x + face_offset + width * j + k,
+                              u_y + face_offset + width * j + k,
+                              u_z + face_offset + width * j + k);
+            }
         }
-    }
-    /* Apply BCs the last face, solving directly. */
-    uint64_t face_offset = height * width * (depth - 1);
-    for (uint32_t j = row_start; j < row_end; ++j) {
-        uint64_t tmp_row_offset = block_height * width * (depth - 2) +
-                                  width * (j - row_start);
-        for (uint32_t k = 0; k < width; k += VLEN) {
-            apply_back_bc(w + face_offset + width * j + k,
-                          tmp + tmp_row_offset + k,
-                          tmp_f_x + tmp_row_offset + k,
-                          tmp_f_y + tmp_row_offset + k,
-                          f_x + face_offset + width * j + k,
-                          f_y + face_offset + width * j + k,
-                          k, j, depth - 1, timestep,
-                          tmp_u_x + width * (j - row_start) + k,
-                          tmp_u_y + width * (j - row_start) + k,
-                          tmp_u_z + width * (j - row_start) + k,
-                          u_x + face_offset + width * j + k,
-                          u_y + face_offset + width * j + k,
-                          u_z + face_offset + width * j + k);
-        }
-    }
 
-    /* Backward subsitute the remaining domain, one face at a time. */
-    for (uint32_t i = 1; i < depth; ++i) {
-        for (uint32_t j = row_start; j < row_end; ++j) {
-            uint64_t row_offset = height * width * (depth - i - 1) +
-                                           width * j;
-            uint64_t tmp_row_offset = block_height * width *
-                                      (depth - i - 1) + width * (j - row_start);
-            backward_sub_row(tmp_f_x + tmp_row_offset, 
-                             tmp_f_y + tmp_row_offset,
-                             tmp_f_z + tmp_row_offset, 
-                             tmp + tmp_row_offset,
-                             width,
-                             tmp_u_x + width * (j - row_start),
-                             tmp_u_y + width * (j - row_start),
-                             tmp_u_z + width * (j - row_start),
-                             u_x + row_offset,
-                             u_y + row_offset,
-                             u_z + row_offset);
+        /* Backward subsitute the remaining domain, one face at a time. */
+        for (uint32_t i = 1; i < depth; ++i) {
+            for (uint32_t j = row_start; j < row_end; ++j) {
+                uint64_t row_offset = height * width * (depth - i - 1) +
+                                               width * j;
+                uint64_t tmp_row_offset = sub_block_height * width *
+                                          (depth - i - 1) + width *
+                                          (j - row_start);
+                backward_sub_row(tmp_f_x + tmp_row_offset, 
+                                 tmp_f_y + tmp_row_offset,
+                                 tmp_f_z + tmp_row_offset, 
+                                 tmp + tmp_row_offset,
+                                 width,
+                                 tmp_u_x + width * (j - row_start),
+                                 tmp_u_y + width * (j - row_start),
+                                 tmp_u_z + width * (j - row_start),
+                                 u_x + row_offset,
+                                 u_y + row_offset,
+                                 u_z + row_offset);
+            }
         }
     }
 }

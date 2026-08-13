@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "alloc.h"
 
@@ -13,6 +14,17 @@
 
 ThreadArray *thread_array_create(uint32_t num_threads, ArenaAllocator *arena)
 {
+    if (num_threads == 0) {
+        const char *env_num_threads = getenv("NUM_THREADS");
+        if (env_num_threads == NULL) {
+            num_threads = 1;
+        } else {
+            if ((num_threads = atoi(env_num_threads)) == 0) {
+                num_threads = 1;
+            }
+        }
+    }
+
     ThreadArray *t_array = arena_push_noalign(arena, sizeof(ThreadArray));
     ThreadArray tmp = { num_threads, {}, {}, NULL };
     memcpy(t_array, &tmp, sizeof(ThreadArray));

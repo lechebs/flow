@@ -7,7 +7,7 @@
 
 #define TIMEIT(func_call) TIMEITN(func_call, 10)
 
-#ifdef TIMEITALL
+#ifdef TIMER
 
 #define TIMEITN(func_call, avg_iter)                              \
 do {                                                              \
@@ -32,33 +32,49 @@ do {                                                              \
            elapsed_ns_avg / (1e6 * avg_iter), avg_iter);          \
 } while (0)
 
-#define TIMER_CREATE(name) \
-    struct timespec _timer_##name##_start, \
-                    _timer_##name##_curr;
+#define TIMER_CREATE(name)                      \
+    struct timespec _timer_##name##_start,      \
+                    _timer_##name##_curr;       \
+    static long _timer_##name##_tot_elapsed_ns; \
+    static long _timer_##name##_elapsed_count;  \
 
 #define TIMER_RESTART(name)                                  \
 do {                                                         \
     clock_gettime(CLOCK_MONOTONIC, &_timer_##name##_start);  \
 } while (0)
 
-#define TIMER_ELAPSED(name, log_cond)                         \
-do {                                                          \
-    clock_gettime(CLOCK_MONOTONIC, &_timer_##name##_curr);    \
-    long elapsed_ns = (_timer_##name##_curr.tv_sec -          \
-                       _timer_##name##_start.tv_sec) * 1e9 +  \
-                      (_timer_##name##_curr.tv_nsec -         \
-                       _timer_##name##_start.tv_nsec);        \
-    if (log_cond) {                                           \
-        printf("%-40s%8.2f ms\n", #name, elapsed_ns / 1e6);   \
-    }                                                         \
+#define TIMER_ELAPSED(name, cond)                                  \
+do {                                                               \
+    if (cond) {                                                    \
+        clock_gettime(CLOCK_MONOTONIC, &_timer_##name##_curr);     \
+        long elapsed_ns = (_timer_##name##_curr.tv_sec -           \
+                           _timer_##name##_start.tv_sec) * 1e9 +   \
+                          (_timer_##name##_curr.tv_nsec -          \
+                           _timer_##name##_start.tv_nsec);         \
+        _timer_##name##_tot_elapsed_ns += elapsed_ns;              \
+        _timer_##name##_elapsed_count++;                           \
+        if (!(_timer_##name##_elapsed_count % TIMER_LOG_FREQ)) {   \
+            printf("%-40s%8.2f ms %8.2f ms (avg %ld runs)\n",      \
+                   #name, elapsed_ns / 1e6,                        \
+                   _timer_##name##_tot_elapsed_ns / 1e6 /          \
+                   _timer_##name##_elapsed_count,                  \
+                   _timer_##name##_elapsed_count);                 \
+        }                                                          \
+    }                                                              \
+} while (0)
+
+#define TIMER_NEWLINE(cond)     \
+do {                            \
+    if (cond) { printf("\n"); } \
 } while (0)
 
 #else
 
-#define TIMEITN(...) func_call;
+#define TIMEITN(func_call, ...) func_call;
 #define TIMER_CREATE(...) ;
 #define TIMER_RESTART(...) ;
 #define TIMER_ELAPSED(...) ;
+#define TIMER_NEWLINE(...) ;
 
 #endif
 
