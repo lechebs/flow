@@ -17,7 +17,7 @@ Solver *solver_alloc(uint32_t domain_depth,
 
 void solver_init(Solver *solver, ArenaAllocator *arena);
 
-void solver_set_porosity(Solver *solver, const ftype *src);
+void solver_set_porosity(Solver *solver, const_field3 src);
 
 void solver_step(Solver *solver, uint32_t timestep, Thread *thread);
 
@@ -25,6 +25,6 @@ const_field3 solver_get_velocity(Solver *solver);
 
 const_field solver_get_pressure(Solver *solver);
 
-const_field solver_get_porosity(Solver *solver);
+const_field3 solver_get_porosity(Solver *solver);
 
 #endif
