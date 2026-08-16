@@ -46,8 +46,7 @@ DEFINE_FUNCTION_BC_U(get_man_u_x, get_man_u_y, get_man_u_z, BC_BACK)
 
 static ftype get_forcing_x(ftype x, ftype y, ftype z, ftype t)
 {
-    // NOTE: Currently k is evaluated at the center of the cell
-    ftype k = get_porosity(x - _DX / 2, y, z, t);
+    ftype k = get_porosity(x, y, z, t);
 
     return sin(x) * (-sin(y + t) * sin(z) +
                       cos(y + t) * sin(z) * _NU * (3 + 1.0 / k) +
@@ -56,7 +55,7 @@ static ftype get_forcing_x(ftype x, ftype y, ftype z, ftype t)
 
 static ftype get_forcing_y(ftype x, ftype y, ftype z, ftype t)
 {
-    ftype k = get_porosity(x, y - _DX / 2, z, t);
+    ftype k = get_porosity(x, y, z, t);
 
     return cos(x) * (cos(y + t) * sin(z) +
                      sin(y + t) * sin(z) * _NU * (3 + 1.0 / k) +
@@ -65,7 +64,7 @@ static ftype get_forcing_y(ftype x, ftype y, ftype z, ftype t)
 
 static ftype get_forcing_z(ftype x, ftype y, ftype z, ftype t)
 {
-    ftype k = get_porosity(x, y, z - _DX / 2, t);
+    ftype k = get_porosity(x, y, z, t);
 
     return cos(x) * (sin(y + t) * cos(z) * -2 +
                      cos(y + t) * cos(z) * 2 * _NU * (3 + 1.0 / k) +
@@ -119,7 +118,7 @@ static void compute_manufactured_pressure(field_size size,
 struct SolverData {
     int num_timesteps;
     field_size size;
-    field porosity;
+    field3 porosity;
     field gamma;
     field pressure;
     field phi;
@@ -136,7 +135,7 @@ static void *solve_brinkman(void *thread)
 
     int num_timesteps = solver_data->num_timesteps;
     field_size size = solver_data->size;
-    field porosity = solver_data->porosity;
+    field3 porosity = solver_data->porosity;
     field gamma = solver_data->gamma;
     field pressure = solver_data->pressure;
     field phi = solver_data->phi;
@@ -153,20 +152,29 @@ static void *solve_brinkman(void *thread)
 
     for (uint32_t t = 1; t < num_timesteps + 1; ++t) {
 
+        ftype t_mid = (t - 0.5) * _DT;
+
         for (uint32_t z = 0; z < size.depth; ++z) {
             for (uint32_t y = 0; y < size.height; ++y) {
                 for (uint32_t x = 0; x < size.width; ++x) {
                     // Updating time dependent porosity
                     uint64_t idx = field_idx(size, x, y, z);
-                    ftype k = get_porosity(x * _DX, y * _DX, z * _DX, t * _DT);
+                    porosity.x[idx] = get_porosity(
+                        x * _DX + _DX / 2, y * _DX, z * _DX, t_mid);
+                    porosity.y[idx] = get_porosity(
+                        x * _DX, y * _DX + _DX / 2, z * _DX, t_mid);
+                    porosity.z[idx] = get_porosity(
+                        x * _DX, y * _DX, z * _DX + _DX / 2, t_mid);
 
-                    porosity[idx] = k;
-                    gamma[idx] = (_DT * _NU) / (2 + _DT * _NU / k) / (_DX * _DX);
+                    ftype k_cell = get_porosity(
+                        x * _DX, y * _DX, z * _DX, t_mid);
+                    gamma[idx] =
+                        (_DT * _NU) / (2 + _DT * _NU / k_cell) / (_DX * _DX);
                 }
             }
         }
 
-        momentum_solve(porosity, gamma, pressure, phi,
+        momentum_solve(to_const_field3(porosity), gamma, pressure, phi,
                        size, eta, zeta, vel, t, thread);
 
         /*
@@ -237,7 +245,7 @@ DEF_TEST(test_convergence_space,
 
         dxs[i] = _DX;
 
-        field porosity = field_alloc(size, arena);
+        field3 porosity = field3_alloc(size, arena);
         field gamma = field_alloc(size, arena);
 
         for (uint32_t z = 0; z < size.depth; ++z) {
@@ -245,10 +253,16 @@ DEF_TEST(test_convergence_space,
                 for (uint32_t x = 0; x < size.width; ++x) {
 
                     uint64_t idx = field_idx(size, x, y, z);
-                    ftype k = get_porosity(x * _DX, y * _DX, z * _DX, 0);
+                    porosity.x[idx] = get_porosity(
+                        x * _DX + _DX / 2, y * _DX, z * _DX, 0);
+                    porosity.y[idx] = get_porosity(
+                        x * _DX, y * _DX + _DX / 2, z * _DX, 0);
+                    porosity.z[idx] = get_porosity(
+                        x * _DX, y * _DX, z * _DX + _DX / 2, 0);
 
-                    porosity[idx] = k;
-                    gamma[idx] = (_DT * _NU) / (2 + _DT * _NU / k) / (_DX * _DX);
+                    ftype k_cell = get_porosity(x * _DX, y * _DX, z * _DX, 0);
+                    gamma[idx] =
+                        (_DT * _NU) / (2 + _DT * _NU / k_cell) / (_DX * _DX);
                 }
             }
         }
@@ -280,7 +294,7 @@ DEF_TEST(test_convergence_space,
         //                        "man_pressure", arena);
         output_vtk_attach_field3(output, to_const_field3(vel),
                                  "velocity", arena);
-        output_vtk_attach_field(output, porosity, "porosity", arena);
+        output_vtk_attach_field(output, porosity.x, "porosity", arena);
 
         uint32_t num_timesteps = round(T / _DT);
 
@@ -377,7 +391,7 @@ DEF_TEST(test_convergence_time,
 
         SET_DT(dt);
 
-        field porosity = field_alloc(size, arena);
+        field3 porosity = field3_alloc(size, arena);
         field gamma = field_alloc(size, arena);
 
         for (uint32_t z = 0; z < size.depth; ++z) {
@@ -385,10 +399,16 @@ DEF_TEST(test_convergence_time,
                 for (uint32_t x = 0; x < size.width; ++x) {
 
                     uint64_t idx = field_idx(size, x, y, z);
-                    ftype k = get_porosity(x * _DX, y * _DX, z * _DX, 0);
+                    porosity.x[idx] = get_porosity(
+                        x * _DX + _DX / 2, y * _DX, z * _DX, 0);
+                    porosity.y[idx] = get_porosity(
+                        x * _DX, y * _DX + _DX / 2, z * _DX, 0);
+                    porosity.z[idx] = get_porosity(
+                        x * _DX, y * _DX, z * _DX + _DX / 2, 0);
 
-                    porosity[idx] = k;
-                    gamma[idx] = (_DT * _NU) / (2 + _DT * _NU / k) / (_DX * _DX);
+                    ftype k_cell = get_porosity(x * _DX, y * _DX, z * _DX, 0);
+                    gamma[idx] =
+                        (_DT * _NU) / (2 + _DT * _NU / k_cell) / (_DX * _DX);
                 }
             }
         }

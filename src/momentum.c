@@ -874,7 +874,10 @@ void compute_Dxx_Dyy_Dzz(const ftype *restrict eta,
 }
 
 static inline __attribute__((always_inline))
-void compute_rhs_vtile(const ftype *restrict porosity,
+void compute_rhs_vtile(const ftype *restrict k_x,
+                       const ftype *restrict k_y,
+                       const ftype *restrict k_z,
+                       const ftype *restrict w,
                        const ftype *restrict p,
                        const ftype *restrict phi,
                        const ftype *restrict eta_x,
@@ -982,9 +985,15 @@ void compute_rhs_vtile(const ftype *restrict porosity,
 
     for (int jj = 0; jj < VLEN; ++jj) {
 
-        vftype k_ = vload(porosity + width * jj);
-        vftype dt_over_beta = _DT / (1 + _DT * _NU / (2 * k_));
-        vftype coeff = 1 - 2 * _DT * _NU / (2 * k_ + _DT * _NU);
+        vftype kx = vload(k_x + width * jj);
+        vftype ky = vload(k_y + width * jj);
+        vftype kz = vload(k_z + width * jj);
+        vftype gamma = vload(w + width * jj);
+
+        vftype dt_over_beta = gamma * (2 * _DX * _DX) / _NU;
+        vftype coeff_x = 1 - gamma * (2 * _DX * _DX) / kx;
+        vftype coeff_y = 1 - gamma * (2 * _DX * _DX) / ky;
+        vftype coeff_z = 1 - gamma * (2 * _DX * _DX) / kz;
 
         vftype rx = vload(rhs_x_t + VLEN * jj);
         vftype ry = vload(rhs_y_t + VLEN * jj);
@@ -1001,9 +1010,9 @@ void compute_rhs_vtile(const ftype *restrict porosity,
         vftype vy = vload(vel_y + width * jj);
         vftype vz = vload(vel_z + width * jj);
 
-        rx += coeff * vx - vload(eta_x + width * jj);
-        ry += coeff * vy - vload(eta_y + width * jj);
-        rz += coeff * vz - vload(eta_z + width * jj);
+        rx += coeff_x * vx - vload(eta_x + width * jj);
+        ry += coeff_y * vy - vload(eta_y + width * jj);
+        rz += coeff_z * vz - vload(eta_z + width * jj);
 
         vstore(rhs_x_t + VLEN * jj, rx);
         vstore(rhs_y_t + VLEN * jj, ry);
@@ -1016,7 +1025,9 @@ void compute_rhs_vtile(const ftype *restrict porosity,
 }
 
 static inline __attribute__((always_inline))
-void solve_vtile_row(const ftype *restrict porosity,
+void solve_vtile_row(const ftype *restrict k_x,
+                     const ftype *restrict k_y,
+                     const ftype *restrict k_z,
                      const ftype *restrict w,
                      const ftype *restrict p,
                      const ftype *restrict phi,
@@ -1052,7 +1063,7 @@ void solve_vtile_row(const ftype *restrict porosity,
 
     transpose_vtile(w, width, VLEN, w_t);
 
-    compute_rhs_vtile(porosity, p, phi, eta_x, eta_y, eta_z,
+    compute_rhs_vtile(k_x, k_y, k_z, w, p, phi, eta_x, eta_y, eta_z,
                       zeta_x, zeta_y, zeta_z, vel_x, vel_y, vel_z,
                       is_last_face, is_last_row, INNER_COL,
                       i, j, 0, depth, height, width, timestep,
@@ -1078,7 +1089,8 @@ void solve_vtile_row(const ftype *restrict porosity,
         /* Load and transpose next tile. */
         transpose_vtile(w + tk, width, VLEN, w_t);
 
-        compute_rhs_vtile(porosity + tk, p + tk, phi + tk,
+        compute_rhs_vtile(k_x + tk, k_y + tk, k_z + tk,
+                          w + tk, p + tk, phi + tk,
                           eta_x + tk, eta_y + tk, eta_z + tk,
                           zeta_x + tk, zeta_y + tk, zeta_z + tk,
                           vel_x + tk, vel_y + tk, vel_z + tk,
@@ -1100,7 +1112,10 @@ void solve_vtile_row(const ftype *restrict porosity,
 
     transpose_vtile(w + width - VLEN, width, VLEN, w_t);
 
-    compute_rhs_vtile(porosity + width - VLEN,
+    compute_rhs_vtile(k_x + width - VLEN,
+                      k_y + width - VLEN,
+                      k_z + width - VLEN,
+                      w + width - VLEN,
                       p + width - VLEN,
                       phi + width - VLEN,
                       eta_x + width - VLEN,
@@ -1190,7 +1205,9 @@ void solve_vtile_row(const ftype *restrict porosity,
     }
 }
 
-static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
+static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k_x,
+                                       const ftype *restrict k_y,
+                                       const ftype *restrict k_z,
                                        const ftype *restrict w,
                                        const ftype *restrict p,
                                        const ftype *restrict phi,
@@ -1228,7 +1245,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
         for (uint32_t j = 0; j < height - VLEN; j += VLEN) {
             /* Solving each row of tiles, except the last. */
             uint64_t off = height * width * i + width * j;
-            solve_vtile_row(k + off, w + off, p + off, phi + off,
+            solve_vtile_row(k_x + off, k_y + off, k_z + off,
+                            w + off, p + off, phi + off,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
@@ -1237,7 +1255,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
         }
         /* Solving each tile of the last row. */
         uint64_t off = height * width * i + width * (height - VLEN);
-        solve_vtile_row(k + off, w + off, p + off, phi + off, 
+        solve_vtile_row(k_x + off, k_y + off, k_z + off,
+                        w + off, p + off, phi + off, 
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
@@ -1253,7 +1272,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
         /* Solving the last face of the domain. */
         for (uint32_t j = 0; j < height - VLEN; j += VLEN) {
             uint64_t off = height * width * (depth - 1) + width * j;
-            solve_vtile_row(k + off, w + off, p + off, phi + off,
+            solve_vtile_row(k_x + off, k_y + off, k_z + off,
+                            w + off, p + off, phi + off,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
@@ -1261,7 +1281,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                             LAST_FACE, INNER_ROW, tmp);
         }
         uint64_t off = height * width * (depth - 1) + width * (height - VLEN);
-        solve_vtile_row(k + off, w + off, p + off, phi + off,
+        solve_vtile_row(k_x + off, k_y + off, k_z + off,
+                        w + off, p + off, phi + off,
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
@@ -1273,7 +1294,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
         for (uint32_t j = 0; j < height - VLEN; j += VLEN) {
             /* Solving each row of tiles, except the last. */
             uint64_t off = height * width * (depth - (t_id + 1)) + width * j;
-            solve_vtile_row(k + off, w + off, p + off, phi + off,
+            solve_vtile_row(k_x + off, k_y + off, k_z + off,
+                            w + off, p + off, phi + off,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
@@ -1284,7 +1306,8 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
         /* Solving each tile of the last row. */
         uint64_t off = height * width * (depth - (t_id + 1)) +
                        width * (height - VLEN);
-        solve_vtile_row(k + off, w + off, p + off, phi + off, 
+        solve_vtile_row(k_x + off, k_y + off, k_z + off,
+                        w + off, p + off, phi + off, 
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
@@ -1898,7 +1921,7 @@ void momentum_init(field_size size, field3 field)
     }
 }
 
-void momentum_solve(const_field porosity,
+void momentum_solve(const_field3 porosity,
                     const_field gamma,
                     const_field pressure,
                     const_field pressure_delta,
@@ -1942,7 +1965,8 @@ void momentum_solve(const_field porosity,
     TIMER_RESTART(solve_momentum_Dxx_blocks_fused_rhs);
 
     solve_Dxx_blocks_fused_rhs(
-        porosity, gamma, pressure, pressure_delta,
+        porosity.x, porosity.y, porosity.z,
+        gamma, pressure, pressure_delta,
         velocity_Dxx.x, velocity_Dxx.y, velocity_Dxx.z,
         velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
         velocity_Dzz.x, velocity_Dzz.y, velocity_Dzz.z,

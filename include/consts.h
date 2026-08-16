@@ -82,4 +82,17 @@ static inline void compute_gamma(const_field porosity,
     }
 }
 
+static inline void compute_gamma_cell(const_field3 porosity,
+                                      field_size size,
+                                      field dst)
+{
+    /* Averaging the three porosity fields works the same
+     * as using porosity in the cell center. */
+    uint64_t num_points = field_num_points(size);
+    for (uint64_t i = 0; i < num_points; ++i) {
+        ftype k = (porosity.x[i] + porosity.y[i] + porosity.z[i]) / 3.0;
+        dst[i] = (_DT * _NU) / (2.0 + _DT * _NU / k) / (_DX * _DX);
+    }
+}
+
 #endif

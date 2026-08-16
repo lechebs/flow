@@ -7,7 +7,7 @@
 
 void momentum_init(field_size size, field3 field);
 
-void momentum_solve(const_field porosity,
+void momentum_solve(const_field3 porosity,
                     const_field gamma,
                     const_field pressure,
                     const_field pressure_delta,

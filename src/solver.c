@@ -9,7 +9,7 @@
 
 struct Solver {
     field_size domain_size;
-    field porosity;
+    field3 porosity;
     field gamma;
     field pressure;
     field pressure_delta;
@@ -32,7 +32,7 @@ Solver *solver_alloc(uint32_t domain_depth,
     domain_size.width = domain_width;
     solver->domain_size = domain_size;
 
-    solver->porosity = field_alloc(domain_size, arena);
+    solver->porosity = field3_alloc(domain_size, arena);
     solver->gamma = field_alloc(domain_size, arena);
     solver->pressure = field_alloc(domain_size, arena);
     solver->pressure_delta = field_alloc(domain_size, arena);
@@ -57,10 +57,6 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
 
     arena_enter(arena);
 
-    /* Setting constant unit porosity. */
-    field tmp = field_alloc(domain_size, arena);
-    field_fill(domain_size, 1e20, tmp);
-
     /*
     for (uint32_t i = 0; i < domain_size.depth; ++i) {
         for (uint32_t j = 0; j < domain_size.height; ++j) {
@@ -74,25 +70,29 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
                 ) {
                     tmp[idx] = 1e-20;
                 }
-            }
+           }
         }
     }
     */
 
-    solver_set_porosity(solver, tmp);
+    /* Setting constant unit porosity. */
+    field3 tmp = field3_alloc(domain_size, arena);
+    field3_fill(domain_size, 1e20, tmp);
+
+    solver_set_porosity(solver, to_const_field3(tmp));
 
     arena_exit(arena);
 }
 
-void solver_set_porosity(Solver *solver, const ftype *src)
+void solver_set_porosity(Solver *solver, const_field3 src)
 {
-    field_copy(solver->domain_size, src, solver->porosity);
-    compute_gamma(src, solver->domain_size, solver->gamma);
+    field3_copy(solver->domain_size, src, solver->porosity);
+    compute_gamma_cell(src, solver->domain_size, solver->gamma);
 }
 
 void solver_step(Solver *solver, uint32_t timestep, Thread *thread)
 {
-    momentum_solve(solver->porosity,
+    momentum_solve(to_const_field3(solver->porosity),
                    solver->gamma,
                    solver->pressure,
                    solver->pressure_delta,
@@ -121,7 +121,7 @@ const_field solver_get_pressure(Solver *solver)
     return solver->pressure;
 }
 
-const_field solver_get_porosity(Solver *solver)
+const_field3 solver_get_porosity(Solver *solver)
 {
-    return solver->porosity;
+    return to_const_field3(solver->porosity);
 }
