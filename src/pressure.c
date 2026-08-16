@@ -262,6 +262,7 @@ void solve_vtiles_row(const ftype *restrict u_x,
 
     ftype __attribute__((aligned(32))) p_t[VLEN * VLEN];
 
+#ifdef FLOW_PAST_CUBE
     /* Homogeneous dirichlet BCs for outlet. */
     vftype p_prev = vbroadcast(0);
     vstore(p_t + VLEN * (VLEN - 1), p_prev);
@@ -282,6 +283,18 @@ void solve_vtiles_row(const ftype *restrict u_x,
         }
         transpose_vtile(p_t, VLEN, width, p + width - VLEN - tk);
     }
+#else
+    vftype p_prev = vbroadcast(0);
+    for (uint32_t tk = 0; tk < width; tk += VLEN) {
+        for (uint32_t k = 0; k < VLEN; ++k) {
+            backward_sub_vcol(tmp_f + VLEN * (width - 1 - (tk + k)),
+                              tmp_upp[width - 1 - (tk + k)],
+                              &p_prev,
+                              p_t + VLEN * (VLEN - 1 - k));
+        }
+        transpose_vtile(p_t, VLEN, width, p + width - VLEN - tk);
+    }
+#endif
 #endif
 }
 

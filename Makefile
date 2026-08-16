@@ -9,7 +9,8 @@ FTYPE ?= DOUBLE
 VEC ?= EXPL
 
 TIMER ?=
-TIMER_FREQ ?= 1
+TIMER_LOG_FREQ ?= 1
+FLOW_PAST_CUBE ?= OFF
 
 DEFINE = -D$(FTYPE) -D$(VEC) -DTIMER_LOG_FREQ=$(TIMER_LOG_FREQ)
 INCLUDE = -I$(INC_DIR) -I$(SRC_DIR)
@@ -17,6 +18,10 @@ LIBS = -lm
 
 ifeq ($(TIMER), ON)
 	DEFINE += -DTIMER
+endif
+
+ifeq ($(FLOW_PAST_CUBE), ON)
+	DEFINE += -DFLOW_PAST_CUBE
 endif
 
 SOLVER_OBJS = solver.o momentum.o pressure.o output.o thread-array.o

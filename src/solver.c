@@ -64,6 +64,7 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
 
     /* Setting constant unit porosity. */
     field tmp = field_alloc(domain_size, arena);
+#ifdef FLOW_PAST_CUBE
     field_fill(domain_size, 1e8, tmp);
 
     for (uint32_t i = 0; i < domain_size.depth; ++i) {
@@ -84,6 +85,9 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
             }
         }
     }
+#else
+    field_fill(domain_size, 1e20, tmp);
+#endif
 
     solver_set_porosity(solver, tmp);
 

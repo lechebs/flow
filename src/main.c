@@ -10,25 +10,23 @@
 #include "output.h"
 #include "thread-array.h"
 
+static ftype bc_zero(ftype x, ftype y, ftype z, ftype t)
+{
+    return 0;
+}
+
+#ifdef FLOW_PAST_CUBE
 #define DEPTH 128
 #define HEIGHT 192
 #define WIDTH 256
 
 #define FINAL_TIME 15.0
 
-#define NUM_THREADS 8
-
-//DEFINE_NU(0.0005)
 DEFINE_NU(0.0003)
 DEFINE_DT(0.001)
 DEFINE_DX(0.00375)
 
 DEFINE_CONSTANT_FORCING(0, 0, 0)
-
-static ftype bc_zero(ftype x, ftype y, ftype z, ftype t)
-{
-    return 0;
-}
 
 static ftype bc_inlet(ftype x, ftype y, ftype z, ftype t)
 {
@@ -43,11 +41,33 @@ DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_BOTTOM)
 
 DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_FRONT)
 DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_BACK)
+#else
+#define DEPTH 128
+#define HEIGHT 128
+#define WIDTH 128
 
-//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_TOP)
-//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BOTTOM)
-//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_FRONT)
-//DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BACK)
+#define FINAL_TIME 10.0
+
+DEFINE_NU(0.0005)
+DEFINE_DT(0.001)
+DEFINE_DX(1.0 / 128.0)
+
+DEFINE_CONSTANT_FORCING(0, 0, 0)
+
+static ftype bc_lid(ftype x, ftype y, ftype z, ftype t)
+{
+    return 1.0 - exp(-2.0 * t);
+}
+
+DEFINE_FUNCTION_BC_U(bc_lid, bc_zero, bc_zero, BC_TOP)
+// TODO: Constant BC != 0 still require initial
+// velocity field to be initialized..
+DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BOTTOM)
+DEFINE_CONSTANT_BC_U(0, 0, 0, BC_LEFT)
+DEFINE_CONSTANT_BC_U(0, 0, 0, BC_RIGHT)
+DEFINE_CONSTANT_BC_U(0, 0, 0, BC_FRONT)
+DEFINE_CONSTANT_BC_U(0, 0, 0, BC_BACK)
+#endif
 
 typedef struct {
     Solver *solver;
@@ -63,7 +83,7 @@ static void *run_simulation(void *t_data)
     OutputVTK *output = sim_data->output;
 
     uint32_t t_id = ((Thread *) t_data)->t_id;
-    output_vtk_write(output, "output/solution-karman-0.vtk", t_data);
+    output_vtk_write(output, "output/solution-cavity-0.vtk", t_data);
     thread_wait_on_barrier(t_data);
 
     uint32_t num_timesteps = (FINAL_TIME - _DT / 2) / _DT + 1;
@@ -73,9 +93,9 @@ static void *run_simulation(void *t_data)
         TIMER_RESTART(solver_step_aggregate);
         solver_step(solver, t, t_data);
 
-        if (t % 250 == 0) {
+        if (t % 100 == 0) {
             char output_file_name[64];
-            sprintf(output_file_name, "output/solution-karman-%d.vtk", t);
+            sprintf(output_file_name, "output/solution-cavity-%d.vtk", t);
             output_vtk_write(output, output_file_name, t_data);
         }
 
@@ -94,9 +114,9 @@ int main(void)
     Solver *solver = solver_alloc(DEPTH, HEIGHT, WIDTH, &arena);
     solver_init(solver, &arena);
 
-    field_size size = { WIDTH, HEIGHT, DEPTH };
+    field_size size = { WIDTH, HEIGHT, 1 };
     OutputVTK *output = output_vtk_create(size, _DX, &arena);
-    uint64_t offset = 0;//HEIGHT * WIDTH * (DEPTH / 2 - 1);
+    uint64_t offset = HEIGHT * WIDTH * (DEPTH / 2 - 1);
 
     output_vtk_attach_field(output, solver_get_porosity(solver), offset,
                             "porosity", &arena);

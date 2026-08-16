@@ -44,6 +44,8 @@ DEFINE_FUNCTION_BC_U(get_man_u_x, get_man_u_y, get_man_u_z, BC_BOTTOM)
 DEFINE_FUNCTION_BC_U(get_man_u_x, get_man_u_y, get_man_u_z, BC_FRONT)
 DEFINE_FUNCTION_BC_U(get_man_u_x, get_man_u_y, get_man_u_z, BC_BACK)
 
+#define POW2(x) ((x) * (x))
+
 static ftype get_forcing_x(ftype x, ftype y, ftype z, ftype t)
 {
     // NOTE: Currently k is evaluated at the center of the cell
@@ -51,7 +53,11 @@ static ftype get_forcing_x(ftype x, ftype y, ftype z, ftype t)
 
     return sin(x) * (-sin(y + t) * sin(z) +
                       cos(y + t) * sin(z) * _NU * (3 + 1.0 / k) +
-                      cos(y + t) * cos(z) * -3 * _NU);
+                      cos(y + t) * cos(z) * -3 * _NU) +
+           /* Convective term contribution. */
+           sin(x) * cos(x) * (POW2(sin(z)) * (POW2(cos(y + t)) -
+                                              POW2(sin(y + t))) +
+           2 * POW2(cos(y + t)) * POW2(cos(z)));
 }
 
 static ftype get_forcing_y(ftype x, ftype y, ftype z, ftype t)
@@ -60,7 +66,11 @@ static ftype get_forcing_y(ftype x, ftype y, ftype z, ftype t)
 
     return cos(x) * (cos(y + t) * sin(z) +
                      sin(y + t) * sin(z) * _NU * (3 + 1.0 / k) +
-                     sin(y + t) * cos(z) * -3 * _NU);
+                     sin(y + t) * cos(z) * -3 * _NU) +
+           /* Convective term contribution. */
+           cos(y + t) * sin(y + t) * (-POW2(sin(x)) * POW2(sin(z)) +
+                                      POW2(cos(x)) * POW2(sin(z)) +
+                                      2 * POW2(cos(x)) * POW2(cos(z)));
 }
 
 static ftype get_forcing_z(ftype x, ftype y, ftype z, ftype t)
@@ -69,13 +79,17 @@ static ftype get_forcing_z(ftype x, ftype y, ftype z, ftype t)
 
     return cos(x) * (sin(y + t) * cos(z) * -2 +
                      cos(y + t) * cos(z) * 2 * _NU * (3 + 1.0 / k) +
-                     cos(y + t) * sin(z) * -3 * _NU);
+                     cos(y + t) * sin(z) * -3 * _NU) +
+           /* Convective term contribution. */
+           sin(z) * cos(z) * (-2 * POW2(sin(x)) * POW2(cos(y + t)) +
+                              -2 * POW2(cos(x)) * POW2(sin(y + t)) +
+                              -4 * POW2(cos(x)) * POW2(cos(y + t)));
 }
 
 DEFINE_FORCING(get_forcing_x, get_forcing_y, get_forcing_z)
 
 static void compute_manufactured_solution(field_size size,
-                                          uint32_t timestep,
+                                          ftype timestep,
                                           field3 dst)
 {
     ftype time = timestep * _DT;
@@ -126,6 +140,7 @@ struct SolverData {
     field3 eta;
     field3 zeta;
     field3 vel;
+    field3 vel_pred;
     OutputVTK *output;
 };
 
@@ -143,6 +158,7 @@ static void *solve_brinkman(void *thread)
     field3 eta = solver_data->eta;
     field3 zeta = solver_data->zeta;
     field3 vel = solver_data->vel;
+    field3 vel_pred = solver_data->vel_pred;
     OutputVTK *output = solver_data->output;
 
     /*
@@ -167,7 +183,7 @@ static void *solve_brinkman(void *thread)
         }
 
         momentum_solve(porosity, gamma, pressure, phi,
-                       size, eta, zeta, vel, t, thread);
+                       size, eta, zeta, vel, vel_pred, t, thread);
 
         /*
         arena_enter(arena);
@@ -256,10 +272,12 @@ DEF_TEST(test_convergence_space,
         field3 eta = field3_alloc_pad(size, arena);
         field3 zeta = field3_alloc_pad(size, arena);
         field3 vel = field3_alloc_pad(size, arena);
+        field3 vel_pred = field3_alloc_pad(size, arena);
 
         field3_fill(size, 0, eta);
         field3_fill(size, 0, zeta);
         field3_fill(size, 0, vel);
+        field3_fill(size, 0, vel_pred);
 
         field pressure = field_alloc(size, arena);
         field phi = field_alloc(size, arena);
@@ -267,6 +285,7 @@ DEF_TEST(test_convergence_space,
         compute_manufactured_solution(size, 0, eta);
         compute_manufactured_solution(size, 0, zeta);
         compute_manufactured_solution(size, 0, vel);
+        compute_manufactured_solution(size, 0.5, vel_pred);
         compute_manufactured_pressure(size, 0.5, pressure);
         field_fill(size, 0, phi);
 
@@ -275,12 +294,12 @@ DEF_TEST(test_convergence_space,
 
         OutputVTK *output = output_vtk_create(size, _DX, arena);
 
-        output_vtk_attach_field(output, pressure, "pressure", arena);
-        //output_vtk_attach_field(output, manufactured_pressure,
+        output_vtk_attach_field(output, pressure, 0, "pressure", arena);
+        //output_vtk_attach_field(output, manufactured_pressure, 0,
         //                        "man_pressure", arena);
-        output_vtk_attach_field3(output, to_const_field3(vel),
+        output_vtk_attach_field3(output, to_const_field3(vel), 0,
                                  "velocity", arena);
-        output_vtk_attach_field(output, porosity, "porosity", arena);
+        output_vtk_attach_field(output, porosity, 0, "porosity", arena);
 
         uint32_t num_timesteps = round(T / _DT);
 
@@ -294,6 +313,7 @@ DEF_TEST(test_convergence_space,
             eta,
             zeta,
             vel,
+            vel_pred,
             output
         };
 
@@ -396,10 +416,12 @@ DEF_TEST(test_convergence_time,
         field3 eta = field3_alloc_pad(size, arena);
         field3 zeta = field3_alloc_pad(size, arena);
         field3 vel = field3_alloc_pad(size, arena);
+        field3 vel_pred = field3_alloc_pad(size, arena);
 
         field3_fill(size, 0, eta);
         field3_fill(size, 0, zeta);
         field3_fill(size, 0, vel);
+        field3_fill(size, 0, vel_pred);
 
         field pressure = field_alloc(size, arena);
         field phi = field_alloc(size, arena);
@@ -407,6 +429,7 @@ DEF_TEST(test_convergence_time,
         compute_manufactured_solution(size, 0, eta);
         compute_manufactured_solution(size, 0, zeta);
         compute_manufactured_solution(size, 0, vel);
+        compute_manufactured_solution(size, 0.5, vel_pred);
         compute_manufactured_pressure(size, 0.5, pressure);
         field_fill(size, 0, phi);
 
@@ -424,7 +447,9 @@ DEF_TEST(test_convergence_time,
             phi,
             eta,
             zeta,
-            vel
+            vel,
+            vel_pred,
+            NULL
         };
 
         thread_array_set_shared_data(t_array, &data);
