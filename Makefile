@@ -3,7 +3,7 @@ CFLAGS = -O3 -Wall -mavx2 -mfma -flto -g -Wno-stringop-truncation
 
 NVCC = nvcc
 CUDA_ARCH ?= sm_89
-NVCC_FLAGS = -arch=$(CUDA_ARCH) -lineinfo
+NVCC_FLAGS = -arch=$(CUDA_ARCH) -lineinfo -fmad=true
 
 SRC_DIR = src
 INC_DIR = include

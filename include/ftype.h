@@ -8,11 +8,116 @@
 
 #ifdef FLOAT
     typedef float ftype;
+    typedef float4 _ftype128;
     typedef float3 ftype3;
 #else
     typedef double ftype;
+    typedef double2 _ftype128;
     typedef double3 ftype3;
 #endif
+
+__device__ __forceinline__ _ftype128 operator+(const _ftype128 &a,
+                                               const _ftype128 &b)
+{
+#ifdef FLOAT
+    return make_float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
+#else
+    return make_double2(a.x + b.x, a.y + b.y);
+#endif
+}
+
+__device__ __forceinline__ _ftype128 operator-(const _ftype128 &a,
+                                               const _ftype128 &b)
+{
+#ifdef FLOAT
+    return make_float4(a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w);
+#else
+    return make_double2(a.x - b.x, a.y - b.y);
+#endif
+}
+
+__device__ __forceinline__ _ftype128 operator*(const _ftype128 &a,
+                                               const _ftype128 &b)
+{
+#ifdef FLOAT
+    return make_float4(a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w);
+#else
+    return make_double2(a.x * b.x, a.y * b.y);
+#endif
+}
+
+__device__ __forceinline__ _ftype128 operator/(const _ftype128 &a,
+                                               const _ftype128 &b)
+{
+#ifdef FLOAT
+    return make_float4(a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w);
+#else
+    return make_double2(a.x / b.x, a.y / b.y);
+#endif
+}
+
+__device__ __forceinline__ _ftype128 operator+(const ftype &a,
+                                               const _ftype128 &b)
+{
+#ifdef FLOAT
+    return make_float4(a + b.x, a + b.y, a + b.z, a + b.w);
+#else
+    return make_double2(a + b.x, a + b.y);
+#endif
+}
+
+__device__ __forceinline__ _ftype128 operator*(const ftype &a,
+                                               const _ftype128 &b)
+{
+#ifdef FLOAT
+    return make_float4(a * b.x, a * b.y, a * b.z, a * b.w);
+#else
+    return make_double2(a * b.x, a * b.y);
+#endif
+}
+
+__device__ __forceinline__ _ftype128 operator/(const ftype &a,
+                                               const _ftype128 &b)
+{
+#ifdef FLOAT
+    return make_float4(a / b.x, a / b.y, a / b.z, a / b.w);
+#else
+    return make_double2(a / b.x, a / b.y);
+#endif
+}
+
+__device__ __forceinline__ _ftype128 operator+(const _ftype128 &a,
+                                               const ftype &b)
+{
+    return b + a;
+}
+
+__device__ __forceinline__ _ftype128 operator*(const _ftype128 &a,
+                                               const ftype &b)
+{
+    return b * a;
+}
+
+__device__ __forceinline__ _ftype128 &operator+=(_ftype128 &a,
+                                                 const _ftype128 &b)
+{
+    a.x += b.x;
+    a.y += b.y;
+#ifdef FLOAT
+    a.z += b.z;
+    a.w += b.w;
+#endif
+    return a;
+}
+
+__device__ __forceinline__ _ftype128 operator-(_ftype128 &a)
+{
+#ifdef FLOAT
+    return make_float4(-a.x, -a.y, -a.z, -a.w);
+#else
+    return make_double2(-a.x, -a.y);
+#endif
+}
 
 #else
 
