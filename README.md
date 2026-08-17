@@ -12,6 +12,10 @@ Currently running in **single-core** on Intel Ultra 7 155H (2023).
 
 ![](images/performance.png)
 
+## Notes
+
+- On 256^3 grids, vectorized loads in the momentum Dzz kernel on the V100 bring ~10% speedup (from 3.41ms to 3.01ms), not visible on RTX 500 Ada.
+
 ## TODO
 
 - [x] complete fused Dxx rhs computation

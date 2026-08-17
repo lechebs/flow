@@ -32,6 +32,42 @@ do {                                                              \
            elapsed_ns_avg / (1e6 * avg_iter), avg_iter);          \
 } while (0)
 
+#ifdef __NVCC__
+
+#include "utils.h"
+
+#define CUDA_TIMER_CREATE(name)                          \
+    cudaEvent_t _timer_##name##_start,                   \
+    		_timer_##name##_stop;                    \
+    CUDA_CHECK(cudaEventCreate(&_timer_##name##_start)); \
+    CUDA_CHECK(cudaEventCreate(&_timer_##name##_stop));
+
+#define CUDA_TIMER_RESTART(name)                             \
+do {                                                    \
+    CUDA_CHECK(cudaEventRecord(_timer_##name##_start)); \
+} while (0)
+
+#define CUDA_TIMER_ELAPSED(name, log_cond)                    \
+do {                                                          \
+    CUDA_CHECK(cudaEventRecord(_timer_##name##_stop));        \
+    CUDA_CHECK(cudaEventSynchronize(_timer_##name##_stop));   \
+    float elapsed_ms;                                         \
+    CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms,              \
+			            _timer_##name##_start,    \
+                                    _timer_##name##_stop));   \
+    if (log_cond) {                                           \
+        printf("%-40s%8.2f ms\n", #name, elapsed_ms);         \
+    }                                                         \
+} while (0)
+
+#define CUDA_TIMER_DESTROY(name)                         \
+do {                                                     \
+    CUDA_CHECK(cudaEventDestroy(_timer_##name##_start)); \
+    CUDA_CHECK(cudaEventDestroy(_timer_##name##_stop));  \
+} while (0)
+
+#endif
+
 #define TIMER_CREATE(name) \
     struct timespec _timer_##name##_start, \
                     _timer_##name##_curr;
