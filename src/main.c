@@ -15,7 +15,7 @@
 #define HEIGHT 256
 #define WIDTH 256
 
-#define NUM_TIMESTEPS 10
+#define NUM_TIMESTEPS 1
 
 #define NUM_THREADS 4
 

@@ -72,6 +72,8 @@ void free_device_data()
     CUDA_CHECK(cudaFree(d_data.u_z));
 }
 
+// TODO: Test 2D coarsening
+
 template<typename BoundaryConditions>
 __global__ void solve_Dzz_sweep(__grid_constant__ const SolveDzzParams params)
 {
@@ -92,46 +94,45 @@ __global__ void solve_Dzz_sweep(__grid_constant__ const SolveDzzParams params)
     ftype *__restrict__ tmp_f_y = tmp + depth * height * width * 2;
     ftype *__restrict__ tmp_f_z = tmp + depth * height * width * 3;
 
-    ftype *__restrict__ tmp_u_x = tmp + depth * height * width * 4;
-    ftype *__restrict__ tmp_u_y = tmp + depth * height * width * 4
-                                      + height * width;
-    ftype *__restrict__ tmp_u_z = tmp + depth * height * width * 4
-                                      + height * width * 2;
-
-    const uint64_t face_stride = height * width;
     const uint64_t xy_offset = width * y + x;
 
     const BoundaryConditions bc;
 
     // Apply BCs to the first face
-    tmp[xy_offset] = 0; // set upper coefficient to 0
-    // Enforce correct solution in rhs
     ftype3 u0 = bc.get_u_delta_front(x, y, 0, params.timestep);
-    tmp_f_x[xy_offset] = u0.x;
-    tmp_f_y[xy_offset] = u0.y;
-    tmp_f_z[xy_offset] = u0.z;
+
+    ftype upp_redu = 0;
+    ftype f_x_redu = u0.x;
+    ftype f_y_redu = u0.y;
+    ftype f_z_redu = u0.z;
+
+    tmp[xy_offset] = upp_redu; // set upper coefficient to 0
+    // Enforce correct solution in rhs
+    tmp_f_x[xy_offset] = f_x_redu;
+    tmp_f_y[xy_offset] = f_y_redu;
+    tmp_f_z[xy_offset] = f_z_redu;
 
     // Gauss reduce the remaining domain, except last face
     for (uint32_t z = 1; z < depth - 1; ++z) {
         const uint64_t xyz_offset = height * width * z + xy_offset;
 
         ftype w = params.w[xyz_offset];
-        ftype upp_prev = tmp[xyz_offset - face_stride];
-        ftype f_x_prev = tmp_f_x[xyz_offset - face_stride];
-        ftype f_y_prev = tmp_f_y[xyz_offset - face_stride];
-        ftype f_z_prev = tmp_f_z[xyz_offset - face_stride];
-
         // TODO: Operator overloading?
         ftype f_x = params.f_x[xyz_offset] - params.u_x[xyz_offset];
         ftype f_y = params.f_y[xyz_offset] - params.u_y[xyz_offset];
         ftype f_z = params.f_z[xyz_offset] - params.u_z[xyz_offset];
 
-        ftype norm_coef = w * upp_prev + 1 + 2 * w;
-        // TODO: Replace division with product
-        tmp[xyz_offset] = -w / norm_coef;
-        tmp_f_x[xyz_offset] = (w * f_x_prev + f_x) / norm_coef;
-        tmp_f_y[xyz_offset] = (w * f_y_prev + f_y) / norm_coef;
-        tmp_f_z[xyz_offset] = (w * f_z_prev + f_z) / norm_coef;
+        ftype norm_coef_inv = 1 / (w * upp_redu + 1 + 2 * w);
+
+        upp_redu = -w * norm_coef_inv;
+        f_x_redu = (w * f_x_redu + f_x) * norm_coef_inv;
+        f_y_redu = (w * f_y_redu + f_y) * norm_coef_inv;
+        f_z_redu = (w * f_z_redu + f_z) * norm_coef_inv;
+
+        tmp[xyz_offset] = upp_redu;
+        tmp_f_x[xyz_offset] = f_x_redu;
+        tmp_f_y[xyz_offset] = f_y_redu;
+        tmp_f_z[xyz_offset] = f_z_redu;
     }
 
     // Apply bcs to last face, solving directly
@@ -139,24 +140,21 @@ __global__ void solve_Dzz_sweep(__grid_constant__ const SolveDzzParams params)
     const uint64_t xyz_offset = height * width * (depth - 1) + xy_offset;
 
     ftype w = params.w[xyz_offset];
-    ftype upp_prev = tmp[xyz_offset - face_stride];
-    ftype f_x_prev = tmp_f_x[xyz_offset - face_stride];
-    ftype f_y_prev = tmp_f_y[xyz_offset - face_stride];
     ftype f_x = params.f_x[xyz_offset] - params.u_x[xyz_offset];
     ftype f_y = params.f_y[xyz_offset] - params.u_y[xyz_offset];
 
-    ftype norm_coef = 1 + 4 * w + (ftype) (4.0 / 3.0) * w * upp_prev;
+    ftype norm_coef = 1 + 4 * w + (ftype) (4.0 / 3.0) * w * upp_redu;
 
     ftype3 un = bc.get_u_delta_back(x, y, depth - 1, params.timestep);
 
     un.x = (w * (ftype) (8.0 / 3.0) * un.x + f_x +
-            (ftype) (4.0 / 3.0) * w * f_x_prev) / norm_coef;
+            (ftype) (4.0 / 3.0) * w * f_x_redu) / norm_coef;
     un.y = (w * (ftype) (8.0 / 3.0) * un.y + f_y +
-            (ftype) (4.0 / 3.0) * w * f_y_prev) / norm_coef;
+            (ftype) (4.0 / 3.0) * w * f_y_redu) / norm_coef;
 
-    tmp_u_x[xy_offset] = un.x;
-    tmp_u_y[xy_offset] = un.y;
-    tmp_u_z[xy_offset] = un.z;
+    ftype u_x_prev = un.x;
+    ftype u_y_prev = un.y;
+    ftype u_z_prev = un.z;
 
     params.u_x[xyz_offset] += un.x;
     params.u_y[xyz_offset] += un.y;
@@ -174,17 +172,13 @@ __global__ void solve_Dzz_sweep(__grid_constant__ const SolveDzzParams params)
         ftype f_z = tmp_f_z[xyz_offset];
         ftype upp = tmp[xyz_offset];
 
-        ftype u_x_prev = tmp_u_x[xy_offset];
-        ftype u_y_prev = tmp_u_y[xy_offset];
-        ftype u_z_prev = tmp_u_z[xy_offset];
-
         ftype u_x = -upp * u_x_prev + f_x;
         ftype u_y = -upp * u_y_prev + f_y;
         ftype u_z = -upp * u_z_prev + f_z;
 
-        tmp_u_x[xy_offset] = u_x;
-        tmp_u_y[xy_offset] = u_y;
-        tmp_u_z[xy_offset] = u_z;
+        u_x_prev = u_x;
+        u_y_prev = u_y;
+        u_z_prev = u_z;
 
         params.u_x[xyz_offset] += u_x;
         params.u_y[xyz_offset] += u_y;
