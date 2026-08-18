@@ -1938,11 +1938,20 @@ void momentum_solve(const_field porosity,
 
     TIMER_RESTART(solve_momentum_Dyy_blocks);
 
+#ifdef TARGET_CUDA
+    if (t_id == 0) {
+        launch_momentum_solve_Dyy(
+            gamma, size.depth, size.height, size.width, timestep,
+            tmp, velocity_Dxx.x, velocity_Dxx.y, velocity_Dxx.z,
+            velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z);
+    }
+#else
     solve_Dyy_blocks(
         gamma, size.depth, size.height, size.width, timestep,
         tmp, velocity_Dxx.x, velocity_Dxx.y, velocity_Dxx.z,
         velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
         t_id, num_threads);
+#endif
 
     thread_wait_on_barrier(thread);
     TIMER_ELAPSED(solve_momentum_Dyy_blocks, t_id == 0);

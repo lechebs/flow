@@ -51,7 +51,7 @@ void alloc_device_data(field_size domain_size)
 
     field_size tmp_size = { domain_size.width,
                             domain_size.height,
-                            domain_size.depth * 4 + 3 };
+                            domain_size.depth * 4 };
     uint64_t tmp_alloc_size = field_num_points(tmp_size) * sizeof(ftype);
 
     CUDA_CHECK(cudaMalloc((void **) &d_data.tmp, tmp_alloc_size));
@@ -94,9 +94,134 @@ void free_device_data()
 
 #define P_128(addr) reinterpret_cast<_ftype128 *>((addr))
 
+struct DxxSweep {};
+struct DyySweep {};
+struct DzzSweep {};
+
+template<typename BoundaryConditions, typename SweepDir>
+struct SweepBoundaryConditions {};
+
 template<typename BoundaryConditions>
-__global__ void solve_Dzz_sweep(GRID_CONSTANT const SolveDzzParams params)
+struct SweepBoundaryConditions<BoundaryConditions, DyySweep>
 {
+    __device__ __forceinline__
+    SweepBoundaryConditions(uint32_t depth_ [[maybe_unused]],
+                            uint32_t height_,
+                            uint32_t width_ [[maybe_unused]])
+        : height(height_) {}
+
+    __device__ __forceinline__
+    ftype3 get_u_start(uint32_t x, uint32_t z, uint32_t t) const
+    {
+        return bc.get_u_delta_top(x, 0, z, t);
+    }
+
+    __device__ __forceinline__
+    ftype3 get_u_end(uint32_t x, uint32_t z, uint32_t t) const
+    {
+        return bc.get_u_delta_bottom(x, height - 1, z, t);
+    }
+
+private:
+    const BoundaryConditions bc;
+    const uint32_t height;
+};
+
+template<typename BoundaryConditions>
+struct SweepBoundaryConditions<BoundaryConditions, DzzSweep>
+{
+    __device__ __forceinline__
+    SweepBoundaryConditions(uint32_t depth_,
+                            uint32_t height_ [[maybe_unused]],
+                            uint32_t width_ [[maybe_unused]])
+        : depth(depth_) {}
+
+    __device__ __forceinline__
+    ftype3 get_u_start(uint32_t x, uint32_t y, uint32_t t) const
+    {
+        return bc.get_u_delta_front(x, y, 0, t);
+    }
+
+    __device__ __forceinline__
+    ftype3 get_u_end(uint32_t x, uint32_t y, uint32_t t) const
+    {
+        return bc.get_u_delta_back(x, y, depth - 1, t);
+    }
+
+private:
+    const BoundaryConditions bc;
+    const uint32_t depth;
+};
+
+template<typename SweepDir>
+struct SweepStride {};
+
+template<>
+struct SweepStride<DyySweep>
+{
+    __device__ __forceinline__
+    SweepStride(uint32_t depth_, uint32_t height_, uint32_t width_)
+        : depth(depth_), height(height_), width(width_) {}
+
+    __device__ __forceinline__ uint32_t face_height() const
+    {
+        return depth;
+    }
+
+    __device__ __forceinline__ uint32_t sweep_extent() const
+    {
+        return height;
+    }
+
+    __device__ __forceinline__ uint64_t global_idx(
+        uint32_t x, uint32_t z, uint32_t y, uint32_t vec_len) const
+    {
+        return (height * width * z + width * y) / vec_len + x;
+    }
+
+private:
+    const uint32_t depth, height, width;
+};
+
+template<>
+struct SweepStride<DzzSweep>
+{
+    __device__ __forceinline__
+    SweepStride(uint32_t depth_, uint32_t height_, uint32_t width_)
+        : depth(depth_), height(height_), width(width_) {}
+
+    __device__ __forceinline__ uint32_t face_height() const
+    {
+        return height;
+    }
+
+    __device__ __forceinline__ uint32_t sweep_extent() const
+    {
+        return depth;
+    }
+
+    __device__ __forceinline__ uint64_t global_idx(
+        uint32_t x, uint32_t y, uint32_t z, uint32_t vec_len) const
+    {
+        // WARNING: x is already divided by vec_length
+        return (height * width * z + width * y) / vec_len + x;
+    }
+
+private:
+    const uint32_t depth, height, width;
+};
+
+// TODO: For tmp buffers, there's no strict need to proceed in the
+// same direction of the f and u buffers, for the cpu version it
+// could be helpful to avoid TLB misses?
+
+// This needs to be wrapped in a struct to be partially specialized for Dzz
+template<typename BoundaryConditions, typename SweepDir>
+__global__ void solve_sweep(GRID_CONSTANT const SolveDzzParams params)
+{
+    using Stride = SweepStride<SweepDir>;
+    using BC = SweepBoundaryConditions<BoundaryConditions, SweepDir>;
+
     const uint32_t x = blockDim.x * blockIdx.x + threadIdx.x;
 
     const uint32_t depth = params.depth;
@@ -123,13 +248,13 @@ __global__ void solve_Dzz_sweep(GRID_CONSTANT const SolveDzzParams params)
     _ftype128 *__restrict__ tmp_f_y = P_128(params.tmp + num_points * 2);
     _ftype128 *__restrict__ tmp_f_z = P_128(params.tmp + num_points * 3);
 
-    const BoundaryConditions bc;
+    const BC bc(depth, height, width);
+    const Stride stride(depth, height, width);
 
-    const uint64_t face_stride = height * width / VEC_LENGTH;
+    // NOTE: Coordinates are relative to the Dzz sweep.
 
-    for (uint32_t y = blockIdx.y; y < height; y += gridDim.y) {
-
-        const uint64_t xy_offset = width / VEC_LENGTH * y + x;
+    for (uint32_t y = blockIdx.y;
+                  y < stride.face_height(); y += gridDim.y) {
 
         _ftype128 u0_x_vec;
         _ftype128 u0_y_vec;
@@ -139,10 +264,10 @@ __global__ void solve_Dzz_sweep(GRID_CONSTANT const SolveDzzParams params)
         // Apply BCs to the first face
 
         // TODO: I see branches in the SASS, are these being fully inlined?
-        ftype3 u0_vec_0 = bc.get_u_delta_front(
-            VEC_LENGTH * x, y, 0, params.timestep);
-        ftype3 u0_vec_1 = bc.get_u_delta_front(
-            VEC_LENGTH * x + 1, y, 0, params.timestep);
+        ftype3 u0_vec_0 = bc.get_u_start(
+            VEC_LENGTH * x, y, params.timestep);
+        ftype3 u0_vec_1 = bc.get_u_start(
+            VEC_LENGTH * x + 1, y, params.timestep);
 
         u0_x_vec.x = u0_vec_0.x;
         u0_y_vec.x = u0_vec_0.y;
@@ -153,10 +278,10 @@ __global__ void solve_Dzz_sweep(GRID_CONSTANT const SolveDzzParams params)
         u0_z_vec.y = u0_vec_1.z;
 
 #ifdef FLOAT
-        ftype3 u0_vec_2 = bc.get_u_delta_front(
-            VEC_LENGTH * x + 2, y, 0, params.timestep);
-        ftype3 u0_vec_3 = bc.get_u_delta_front(
-            VEC_LENGTH * x + 3, y, 0, params.timestep);
+        ftype3 u0_vec_2 = bc.get_u_start(
+            VEC_LENGTH * x + 2, y, params.timestep);
+        ftype3 u0_vec_3 = bc.get_u_start(
+            VEC_LENGTH * x + 3, y, params.timestep);
 
         u0_x_vec.z = u0_vec_2.x;
         u0_y_vec.z = u0_vec_2.y;
@@ -175,6 +300,11 @@ __global__ void solve_Dzz_sweep(GRID_CONSTANT const SolveDzzParams params)
         _ftype128 f_y_redu = u0_y_vec;
         _ftype128 f_z_redu = u0_z_vec;
 
+        // TODO: Check whether traversing tmp front to back
+        // is always better than top to bottom
+
+        const uint64_t xy_offset = stride.global_idx(x, y, 0, VEC_LENGTH);
+
         tmp[xy_offset] = upp_redu; // set upper coefficient to 0
         // Enforce correct solution in rhs
         tmp_f_x[xy_offset] = f_x_redu;
@@ -182,8 +312,9 @@ __global__ void solve_Dzz_sweep(GRID_CONSTANT const SolveDzzParams params)
         tmp_f_z[xy_offset] = f_z_redu;
 
         // Gauss reduce the remaining domain, except last face
-        for (uint32_t z = 1; z < depth - 1; ++z) {
-            const uint64_t xyz_offset = face_stride * z + xy_offset;
+        for (uint32_t z = 1; z < stride.sweep_extent() - 1; ++z) {
+            const uint64_t xyz_offset =
+                stride.global_idx(x, y, z, VEC_LENGTH);
 
             _ftype128 w = p_w[xyz_offset];
             _ftype128 f_x = p_f_x[xyz_offset] - p_u_x[xyz_offset];
@@ -205,31 +336,24 @@ __global__ void solve_Dzz_sweep(GRID_CONSTANT const SolveDzzParams params)
 
         // Apply bcs to last face, solving directly
 
-        const uint64_t xyz_offset = face_stride * (depth - 1) + xy_offset;
+        const uint64_t xyz_offset =
+            stride.global_idx(x, y, stride.sweep_extent() - 1, VEC_LENGTH);
 
         _ftype128 w = p_w[xyz_offset];
-        _ftype128 upp_prev = tmp[xyz_offset - face_stride];
-
-        _ftype128 f_x = p_f_x[xyz_offset] - p_u_x[xyz_offset];
-        _ftype128 f_y = p_f_y[xyz_offset] - p_u_y[xyz_offset];
 
         _ftype128 norm_coef_inv
-            = 1 / (1 + 4 * w + (ftype) (4.0 / 3.0) * w * upp_prev);
+            = 1 / (1 + 4 * w + (ftype) (4.0 / 3.0) * w * upp_redu);
 
-        ftype3 un_0 = bc.get_u_delta_back(
-            VEC_LENGTH * x, y, depth - 1, params.timestep);
-        ftype3 un_1 = bc.get_u_delta_back(
-            VEC_LENGTH * x + 1, y, depth - 1, params.timestep);
+        ftype3 un_0 = bc.get_u_end(VEC_LENGTH * x, y, params.timestep);
+        ftype3 un_1 = bc.get_u_end(VEC_LENGTH * x + 1, y, params.timestep);
 
         _ftype128 un_x = { un_0.x, un_1.x };
         _ftype128 un_y = { un_0.y, un_1.y };
         _ftype128 un_z = { un_0.z, un_1.z };
 
 #ifdef FLOAT
-        ftype3 un_2 = bc.get_u_delta_back(
-            VEC_LENGTH * x + 2, y, depth - 1, params.timestep);
-        ftype3 un_3 = bc.get_u_delta_back(
-            VEC_LENGTH * x + 3, y, depth - 1, params.timestep);
+        ftype3 un_2 = bc.get_u_end(VEC_LENGTH * x + 2, y, params.timestep);
+        ftype3 un_3 = bc.get_u_end(VEC_LENGTH * x + 3, y, params.timestep);
 
         un_x.z = un_2.x;
         un_y.z = un_2.y;
@@ -239,10 +363,21 @@ __global__ void solve_Dzz_sweep(GRID_CONSTANT const SolveDzzParams params)
         un_z.w = un_3.z;
 #endif
 
+        _ftype128 f_x = p_f_x[xyz_offset] - p_u_x[xyz_offset];
+
+        // TODO: Can you wrap this inside SweepBoundaryConditions?
+        if constexpr (std::is_same_v<SweepDir, DzzSweep>) {
+            _ftype128 f_y = p_f_y[xyz_offset] - p_u_y[xyz_offset];
+            un_y = (w * (ftype) (8.0 / 3.0) * un_y + f_y +
+                (ftype) (4.0 / 3.0) * w * f_y_redu) * norm_coef_inv;
+        } else { // DyySweep
+            _ftype128 f_z = p_f_z[xyz_offset] - p_u_z[xyz_offset];
+            un_z = (w * (ftype) (8.0 / 3.0) * un_z + f_z +
+                (ftype) (4.0 / 3.0) * w * f_z_redu) * norm_coef_inv;
+        }
+
         un_x = (w * (ftype) (8.0 / 3.0) * un_x + f_x +
                 (ftype) (4.0 / 3.0) * w * f_x_redu) * norm_coef_inv;
-        un_y = (w * (ftype) (8.0 / 3.0) * un_y + f_y +
-                (ftype) (4.0 / 3.0) * w * f_y_redu) * norm_coef_inv;
 
         _ftype128 u_x_prev = un_x;
         _ftype128 u_y_prev = un_y;
@@ -253,9 +388,9 @@ __global__ void solve_Dzz_sweep(GRID_CONSTANT const SolveDzzParams params)
         p_u_z[xyz_offset] += un_z;
 
         // Backward substitution
-        for (uint32_t z = 1; z < depth; ++z) {
-            const uint64_t xyz_offset = face_stride * (depth - z - 1) +
-                                        xy_offset;
+        for (uint32_t z = 1; z < stride.sweep_extent(); ++z) {
+            const uint64_t xyz_offset = stride.global_idx(
+                x, y, stride.sweep_extent() - z - 1, VEC_LENGTH);
 
             _ftype128 f_x = tmp_f_x[xyz_offset];
             _ftype128 f_y = tmp_f_y[xyz_offset];
@@ -271,6 +406,58 @@ __global__ void solve_Dzz_sweep(GRID_CONSTANT const SolveDzzParams params)
             p_u_z[xyz_offset] += u_z_prev;
         }
     }
+}
+
+void launch_momentum_solve_Dyy(const ftype *__restrict__ w,
+                               uint32_t depth,
+                               uint32_t height,
+                               uint32_t width,
+                               uint32_t timestep,
+                               ftype *__restrict__ tmp,
+                               ftype *__restrict__ f_x,
+                               ftype *__restrict__ f_y,
+                               ftype *__restrict__ f_z,
+                               ftype *__restrict__ u_x,
+                               ftype *__restrict__ u_y,
+                               ftype *__restrict__ u_z)
+{
+    uint64_t alloc_size = depth * height * width * sizeof(ftype);
+
+    // NOTE: The first transfer is redundant.
+    CUDA_CHECK(cudaMemcpy(d_data.w, w, alloc_size, CUDA_H2D));
+    CUDA_CHECK(cudaMemcpy(d_data.f_x, f_x, alloc_size, CUDA_H2D));
+    CUDA_CHECK(cudaMemcpy(d_data.f_y, f_y, alloc_size, CUDA_H2D));
+    CUDA_CHECK(cudaMemcpy(d_data.f_z, f_z, alloc_size, CUDA_H2D));
+    CUDA_CHECK(cudaMemcpy(d_data.u_x, u_x, alloc_size, CUDA_H2D));
+    CUDA_CHECK(cudaMemcpy(d_data.u_y, u_y, alloc_size, CUDA_H2D));
+    CUDA_CHECK(cudaMemcpy(d_data.u_z, u_z, alloc_size, CUDA_H2D));
+
+    // Spawn one thread per point in the xz plane.
+
+    const int num_threads = 64;
+    const dim3 num_blocks((width / VEC_LENGTH - 1) / num_threads + 1,
+                          depth / COARSE_FACTOR_Y);
+
+    d_data.timestep = timestep;
+
+    using BC = BoundaryConditions<ManUx, ManUy, ManUz>;
+
+    // If the domain is small enough in the depth dimension, shared
+    // memory could be used to hold the reduced coefficients.
+
+    CUDA_TIMER_CREATE(solve_Dyy_sweep);
+    CUDA_TIMER_RESTART(solve_Dyy_sweep);
+    CUDA_CHECK_LAUNCH(
+        solve_sweep<BC, DyySweep><<<num_blocks, num_threads>>>(d_data));
+    cudaDeviceSynchronize();
+    CUDA_TIMER_ELAPSED(solve_Dyy_sweep, 1);
+    CUDA_TIMER_DESTROY(solve_Dyy_sweep);
+
+    CUDA_CHECK(cudaMemcpy(u_x, d_data.u_x, alloc_size, CUDA_D2H));
+    CUDA_CHECK(cudaMemcpy(u_y, d_data.u_y, alloc_size, CUDA_D2H));
+    CUDA_CHECK(cudaMemcpy(u_z, d_data.u_z, alloc_size, CUDA_D2H));
+
+    // No need to synchronize
 }
 
 void launch_momentum_solve_Dzz(const ftype *__restrict__ w,
@@ -313,7 +500,7 @@ void launch_momentum_solve_Dzz(const ftype *__restrict__ w,
     CUDA_TIMER_CREATE(solve_Dzz_sweep);
     CUDA_TIMER_RESTART(solve_Dzz_sweep);
     CUDA_CHECK_LAUNCH(
-        solve_Dzz_sweep<BC><<<num_blocks, num_threads>>>(d_data));
+        solve_sweep<BC, DzzSweep><<<num_blocks, num_threads>>>(d_data));
     cudaDeviceSynchronize();
     CUDA_TIMER_ELAPSED(solve_Dzz_sweep, 1);
     CUDA_TIMER_DESTROY(solve_Dzz_sweep);
@@ -322,5 +509,5 @@ void launch_momentum_solve_Dzz(const ftype *__restrict__ w,
     CUDA_CHECK(cudaMemcpy(u_y, d_data.u_y, alloc_size, CUDA_D2H));
     CUDA_CHECK(cudaMemcpy(u_z, d_data.u_z, alloc_size, CUDA_D2H));
 
-    /* No need to synchronize */
+    // No need to synchronize
 }

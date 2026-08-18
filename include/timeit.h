@@ -38,7 +38,7 @@ do {                                                              \
 
 #define CUDA_TIMER_CREATE(name)                          \
     cudaEvent_t _timer_##name##_start,                   \
-    		_timer_##name##_stop;                    \
+                _timer_##name##_stop;                    \
     CUDA_CHECK(cudaEventCreate(&_timer_##name##_start)); \
     CUDA_CHECK(cudaEventCreate(&_timer_##name##_stop));
 
@@ -53,7 +53,7 @@ do {                                                          \
     CUDA_CHECK(cudaEventSynchronize(_timer_##name##_stop));   \
     float elapsed_ms;                                         \
     CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms,              \
-			            _timer_##name##_start,    \
+                                    _timer_##name##_start,    \
                                     _timer_##name##_stop));   \
     if (log_cond) {                                           \
         printf("%-40s%8.2f ms\n", #name, elapsed_ms);         \
@@ -103,6 +103,11 @@ do {                            \
 #define TIMER_RESTART(...) ;
 #define TIMER_ELAPSED(...) ;
 #define TIMER_NEWLINE(...) ;
+
+#define CUDA_TIMER_CREATE(...) ;
+#define CUDA_TIMER_RESTART(...) ;
+#define CUDA_TIMER_ELAPSED(...) ;
+#define CUDA_TIMER_DESTROY(...) ;
 
 #endif
 
