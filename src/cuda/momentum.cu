@@ -154,24 +154,20 @@ private:
 };
 
 template<typename SweepDir>
-struct SweepStride {};
+struct SweepUtils {};
 
 template<>
-struct SweepStride<DyySweep>
+struct SweepUtils<DyySweep>
 {
     __device__ __forceinline__
-    SweepStride(uint32_t depth_, uint32_t height_, uint32_t width_)
+    SweepUtils(uint32_t depth_, uint32_t height_, uint32_t width_)
         : depth(depth_), height(height_), width(width_) {}
 
-    __device__ __forceinline__ uint32_t face_height() const
-    {
-        return depth;
-    }
+    __device__ __forceinline__ uint32_t face_height() const { return depth; }
 
-    __device__ __forceinline__ uint32_t sweep_extent() const
-    {
-        return height;
-    }
+    __device__ __forceinline__ uint32_t sweep_extent() const { return height; }
+
+    __device__ __forceinline__ bool is_Dzz_sweep() const { return false; }
 
     __device__ __forceinline__ uint64_t global_idx(
         uint32_t x, uint32_t z, uint32_t y, uint32_t vec_len) const
@@ -179,26 +175,23 @@ struct SweepStride<DyySweep>
         return (height * width * z + width * y) / vec_len + x;
     }
 
+
 private:
     const uint32_t depth, height, width;
 };
 
 template<>
-struct SweepStride<DzzSweep>
+struct SweepUtils<DzzSweep>
 {
     __device__ __forceinline__
-    SweepStride(uint32_t depth_, uint32_t height_, uint32_t width_)
+    SweepUtils(uint32_t depth_, uint32_t height_, uint32_t width_)
         : depth(depth_), height(height_), width(width_) {}
 
-    __device__ __forceinline__ uint32_t face_height() const
-    {
-        return height;
-    }
+    __device__ __forceinline__ uint32_t face_height() const { return height; }
 
-    __device__ __forceinline__ uint32_t sweep_extent() const
-    {
-        return depth;
-    }
+    __device__ __forceinline__ uint32_t sweep_extent() const { return depth; }
+
+    __device__ __forceinline__ bool is_Dzz_sweep() const { return true; }
 
     __device__ __forceinline__ uint64_t global_idx(
         uint32_t x, uint32_t y, uint32_t z, uint32_t vec_len) const
@@ -219,7 +212,7 @@ private:
 template<typename BoundaryConditions, typename SweepDir>
 __global__ void solve_sweep(GRID_CONSTANT const SolveDzzParams params)
 {
-    using Stride = SweepStride<SweepDir>;
+    using SweepUtils = SweepUtils<SweepDir>;
     using BC = SweepBoundaryConditions<BoundaryConditions, SweepDir>;
 
     const uint32_t x = blockDim.x * blockIdx.x + threadIdx.x;
@@ -249,12 +242,12 @@ __global__ void solve_sweep(GRID_CONSTANT const SolveDzzParams params)
     _ftype128 *__restrict__ tmp_f_z = P_128(params.tmp + num_points * 3);
 
     const BC bc(depth, height, width);
-    const Stride stride(depth, height, width);
+    const SweepUtils sweep(depth, height, width);
 
     // NOTE: Coordinates are relative to the Dzz sweep.
 
     for (uint32_t y = blockIdx.y;
-                  y < stride.face_height(); y += gridDim.y) {
+                  y < sweep.face_height(); y += gridDim.y) {
 
         _ftype128 u0_x_vec;
         _ftype128 u0_y_vec;
@@ -300,21 +293,19 @@ __global__ void solve_sweep(GRID_CONSTANT const SolveDzzParams params)
         _ftype128 f_y_redu = u0_y_vec;
         _ftype128 f_z_redu = u0_z_vec;
 
-        // TODO: Check whether traversing tmp front to back
-        // is always better than top to bottom
+        // TODO: Traversing front to back is slightly faster on V100 (~1%)
+        const uint64_t tmp_offset = width / VEC_LENGTH * y + x;
 
-        const uint64_t xy_offset = stride.global_idx(x, y, 0, VEC_LENGTH);
-
-        tmp[xy_offset] = upp_redu; // set upper coefficient to 0
+        tmp[tmp_offset] = upp_redu; // set upper coefficient to 0
         // Enforce correct solution in rhs
-        tmp_f_x[xy_offset] = f_x_redu;
-        tmp_f_y[xy_offset] = f_y_redu;
-        tmp_f_z[xy_offset] = f_z_redu;
+        tmp_f_x[tmp_offset] = f_x_redu;
+        tmp_f_y[tmp_offset] = f_y_redu;
+        tmp_f_z[tmp_offset] = f_z_redu;
 
         // Gauss reduce the remaining domain, except last face
-        for (uint32_t z = 1; z < stride.sweep_extent() - 1; ++z) {
+        for (uint32_t z = 1; z < sweep.sweep_extent() - 1; ++z) {
             const uint64_t xyz_offset =
-                stride.global_idx(x, y, z, VEC_LENGTH);
+                sweep.global_idx(x, y, z, VEC_LENGTH);
 
             _ftype128 w = p_w[xyz_offset];
             _ftype128 f_x = p_f_x[xyz_offset] - p_u_x[xyz_offset];
@@ -328,16 +319,19 @@ __global__ void solve_sweep(GRID_CONSTANT const SolveDzzParams params)
             f_y_redu = (w * f_y_redu + f_y) * norm_coef_inv;
             f_z_redu = (w * f_z_redu + f_z) * norm_coef_inv;
 
-            tmp[xyz_offset] = upp_redu;
-            tmp_f_x[xyz_offset] = f_x_redu;
-            tmp_f_y[xyz_offset] = f_y_redu;
-            tmp_f_z[xyz_offset] = f_z_redu;
+            const uint64_t tmp_offset =
+                (height * width * z + width * y) / VEC_LENGTH + x;
+
+            tmp[tmp_offset] = upp_redu;
+            tmp_f_x[tmp_offset] = f_x_redu;
+            tmp_f_y[tmp_offset] = f_y_redu;
+            tmp_f_z[tmp_offset] = f_z_redu;
         }
 
         // Apply bcs to last face, solving directly
 
         const uint64_t xyz_offset =
-            stride.global_idx(x, y, stride.sweep_extent() - 1, VEC_LENGTH);
+            sweep.global_idx(x, y, sweep.sweep_extent() - 1, VEC_LENGTH);
 
         _ftype128 w = p_w[xyz_offset];
 
@@ -366,7 +360,7 @@ __global__ void solve_sweep(GRID_CONSTANT const SolveDzzParams params)
         _ftype128 f_x = p_f_x[xyz_offset] - p_u_x[xyz_offset];
 
         // TODO: Can you wrap this inside SweepBoundaryConditions?
-        if constexpr (std::is_same_v<SweepDir, DzzSweep>) {
+        if (sweep.is_Dzz_sweep()) {
             _ftype128 f_y = p_f_y[xyz_offset] - p_u_y[xyz_offset];
             un_y = (w * (ftype) (8.0 / 3.0) * un_y + f_y +
                 (ftype) (4.0 / 3.0) * w * f_y_redu) * norm_coef_inv;
@@ -388,18 +382,22 @@ __global__ void solve_sweep(GRID_CONSTANT const SolveDzzParams params)
         p_u_z[xyz_offset] += un_z;
 
         // Backward substitution
-        for (uint32_t z = 1; z < stride.sweep_extent(); ++z) {
-            const uint64_t xyz_offset = stride.global_idx(
-                x, y, stride.sweep_extent() - z - 1, VEC_LENGTH);
+        for (uint32_t z = 1; z < sweep.sweep_extent(); ++z) {
+            const uint64_t tmp_offset =
+                (height * width * (sweep.sweep_extent() - z - 1) +
+		 width * y) / VEC_LENGTH + x;
 
-            _ftype128 f_x = tmp_f_x[xyz_offset];
-            _ftype128 f_y = tmp_f_y[xyz_offset];
-            _ftype128 f_z = tmp_f_z[xyz_offset];
-            _ftype128 upp = tmp[xyz_offset];
+            _ftype128 f_x = tmp_f_x[tmp_offset];
+            _ftype128 f_y = tmp_f_y[tmp_offset];
+            _ftype128 f_z = tmp_f_z[tmp_offset];
+            _ftype128 upp = tmp[tmp_offset];
 
             u_x_prev = -upp * u_x_prev + f_x;
             u_y_prev = -upp * u_y_prev + f_y;
             u_z_prev = -upp * u_z_prev + f_z;
+
+            const uint64_t xyz_offset = sweep.global_idx(
+                x, y, sweep.sweep_extent() - z - 1, VEC_LENGTH);
 
             p_u_x[xyz_offset] += u_x_prev;
             p_u_y[xyz_offset] += u_y_prev;
