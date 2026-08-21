@@ -1059,6 +1059,57 @@ void compute_rhs_vtile(const ftype *restrict k_x,
     for (int jj = 0; jj < VLEN; ++jj) {
         for (int kk = 0; kk < VLEN; ++kk) {
 
+            /* Right boundary values at (k + kk, j + jj, i) */
+            ftype bc_right_x_val = 0, bc_right_y_val = 0, bc_right_z_val = 0;
+            if (is_last_col && kk == VLEN - 1) {
+#ifdef FLOW_PAST_CUBE
+                /* Zero-gradient convective outlet: u(W) = u(W-1) */
+                bc_right_x_val = vel_pred_x[jj * width + kk];
+                bc_right_y_val = vel_pred_y[jj * width + kk];
+                bc_right_z_val = vel_pred_z[jj * width + kk];
+#else
+                vftype rx, ry, rz, rx_old, ry_old, rz_old;
+                _get_right_bc_u(k + kk, j, i, timestep, &rx, &ry, &rz);
+                _get_right_bc_u(k + kk, j, i, timestep - 1, &rx_old, &ry_old, &rz_old);
+                ftype tx[VLEN], tx_old[VLEN], ty[VLEN], ty_old[VLEN], tz[VLEN], tz_old[VLEN];
+                vstore(tx, rx); vstore(tx_old, rx_old);
+                vstore(ty, ry); vstore(ty_old, ry_old);
+                vstore(tz, rz); vstore(tz_old, rz_old);
+                bc_right_x_val = 0.5 * (tx[jj] + tx_old[jj]);
+                bc_right_y_val = 0.5 * (ty[jj] + ty_old[jj]);
+                bc_right_z_val = 0.5 * (tz[jj] + tz_old[jj]);
+#endif
+            }
+
+            /* Bottom boundary values at (k + kk, j + jj, i) */
+            ftype bc_bot_x_val = 0, bc_bot_y_val = 0, bc_bot_z_val = 0;
+            if (is_last_row && jj == VLEN - 1) {
+                vftype bx, by, bz, bx_old, by_old, bz_old;
+                _get_bottom_bc_u(k, j + jj, i, timestep, &bx, &by, &bz);
+                _get_bottom_bc_u(k, j + jj, i, timestep - 1, &bx_old, &by_old, &bz_old);
+                ftype tx[VLEN], tx_old[VLEN], ty[VLEN], ty_old[VLEN], tz[VLEN], tz_old[VLEN];
+                vstore(tx, bx); vstore(tx_old, bx_old);
+                vstore(ty, by); vstore(ty_old, by_old);
+                vstore(tz, bz); vstore(tz_old, bz_old);
+                bc_bot_x_val = 0.5 * (tx[kk] + tx_old[kk]);
+                bc_bot_y_val = 0.5 * (ty[kk] + ty_old[kk]);
+                bc_bot_z_val = 0.5 * (tz[kk] + tz_old[kk]);
+            }
+
+            /* Back boundary values at (k + kk, j + jj, i) */
+            ftype bc_back_x_val = 0, bc_back_y_val = 0, bc_back_z_val = 0;
+            if (is_last_face && i == depth - 1) {
+                vftype fx, fy, fz, fx_old, fy_old, fz_old;
+                _get_back_bc_u(k, j + jj, i, timestep, &fx, &fy, &fz);
+                _get_back_bc_u(k, j + jj, i, timestep - 1, &fx_old, &fy_old, &fz_old);
+                ftype tx[VLEN], tx_old[VLEN], ty[VLEN], ty_old[VLEN], tz[VLEN], tz_old[VLEN];
+                vstore(tx, fx); vstore(tx_old, fx_old);
+                vstore(ty, fy); vstore(ty_old, fy_old);
+                vstore(tz, fz); vstore(tz_old, fz_old);
+                bc_back_x_val = 0.5 * (tx[kk] + tx_old[kk]);
+                bc_back_y_val = 0.5 * (ty[kk] + ty_old[kk]);
+                bc_back_z_val = 0.5 * (tz[kk] + tz_old[kk]);
+            }
 
             ftype vy_avg = 0.25 * (vel_pred_y[jj * width + kk] +
                                    vel_pred_y[jj * width + kk + 1] +
@@ -1072,23 +1123,15 @@ void compute_rhs_vtile(const ftype *restrict k_x,
 
             ftype vx_dy;
             if (is_last_row && jj == VLEN - 1) {
-                vftype vx, vx_old, _y, _z;
-                _get_bottom_bc_u(k, j + jj, i, timestep, &vx, &_y, &_z);
-                _get_bottom_bc_u(k, j + jj, i, timestep - 1, &vx_old, &_y, &_z);
-                ftype tmp[VLEN], tmp_old[VLEN];
-                vstore(tmp, vx);
-                vstore(tmp_old, vx_old);
-
                 /* 2nd-order asymmetric boundary differencing: */
-                vx_dy = ((ftype) (4.0 / 3.0) * 0.5 * (tmp[kk] + tmp_old[kk]) -
+                vx_dy = ((ftype) (4.0 / 3.0) * bc_bot_x_val -
                          vel_pred_x[jj * width + kk] -
                          (ftype) (1.0 / 3.0) * vel_pred_x[(jj - 1) * width + kk]) / _DX;
                 /* Lower-order midpoint alternative:
-                vx_dy = (0.5 * (tmp[kk] + tmp_old[kk]) -
+                vx_dy = (bc_bot_x_val -
                          0.5 * (vel_pred_x[jj * width + kk] +
                                 vel_pred_x[(jj - 1) * width + kk])) / _DX;
                 */
-
             } else {
                 vx_dy = (vel_pred_x[(jj + 1) * width + kk] -
                          vel_pred_x[(jj - 1) * width + kk]) / (2 * _DX);
@@ -1096,19 +1139,12 @@ void compute_rhs_vtile(const ftype *restrict k_x,
 
             ftype vx_dz;
             if (is_last_face && i == depth - 1) {
-                vftype vx, vx_old, _y, _z;
-                _get_back_bc_u(k, j + jj, i, timestep, &vx, &_y, &_z);
-                _get_back_bc_u(k, j + jj, i, timestep - 1, &vx_old, &_y, &_z);
-                ftype tmp[VLEN], tmp_old[VLEN];
-                vstore(tmp, vx);
-                vstore(tmp_old, vx_old);
-
                 /* 2nd-order asymmetric boundary differencing: */
-                vx_dz = ((ftype) (4.0 / 3.0) * 0.5 * (tmp[kk] + tmp_old[kk]) -
+                vx_dz = ((ftype) (4.0 / 3.0) * bc_back_x_val -
                          vel_pred_x[jj * width + kk] -
                          (ftype) (1.0 / 3.0) * vel_pred_x[jj * width + kk - height * width]) / _DX;
                 /* Lower-order midpoint alternative:
-                vx_dz = (0.5 * (tmp[kk] + tmp_old[kk]) -
+                vx_dz = (bc_back_x_val -
                          0.5 * (vel_pred_x[jj * width + kk] +
                                 vel_pred_x[jj * width + kk - height * width])) / _DX;
                 */
@@ -1118,49 +1154,61 @@ void compute_rhs_vtile(const ftype *restrict k_x,
             }
 
             ftype vy_tr;
-#ifdef FLOW_PAST_CUBE
-            vy_tr = 0.5 * vel_pred_y[jj * width + kk] +
-                    0.5 * vel_pred_y[jj * width + kk + 1];
-#else
             if (is_last_col && kk == VLEN - 1) {
-                vftype vy, vy_old, _x, _z;
-                _get_right_bc_u(k + kk, j, i, timestep, &_x, &vy, &_z);
-                _get_right_bc_u(k + kk, j, i, timestep - 1, &_x, &vy_old, &_z);
-
-                ftype tmp[VLEN], tmp_old[VLEN];
-                vstore(tmp, vy);
-                vstore(tmp_old, vy_old);
-                vy_tr = 0.5 * (tmp[jj] + tmp_old[jj]);
+                vy_tr = bc_right_y_val;
             } else {
                 vy_tr = 0.5 * vel_pred_y[jj * width + kk] +
                         0.5 * vel_pred_y[jj * width + kk + 1];
             }
-#endif
 
-            rhs_x_t[jj * VLEN + kk] -= 1.0 * (
-                vel_pred_x[jj * width + kk] *
-                    (vel_pred_x[jj * width + kk + 1] -
-                     vel_pred_x[jj * width + kk - 1]) / (2 * _DX) +
+            /* Conservative fluxes for x-momentum */
+            ftype fx_xp = (is_last_col && kk == VLEN - 1)
+                ? 0.5 * (bc_right_x_val + vel_pred_x[jj * width + kk])
+                : 0.5 * (vel_pred_x[jj * width + kk + 1] + vel_pred_x[jj * width + kk]);
+            ftype fx_xm = 0.5 * (vel_pred_x[jj * width + kk - 1] + vel_pred_x[jj * width + kk]);
+            ftype div_xx = (fx_xp * fx_xp - fx_xm * fx_xm) / _DX;
+
+            ftype fx_yp = (is_last_row && jj == VLEN - 1)
+                ? bc_bot_x_val * vy_tr
+                : (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[(jj + 1) * width + kk]) * vy_tr;
+            ftype fx_ym = (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[(jj - 1) * width + kk]) *
+                          (0.5 * vel_pred_y[(jj - 1) * width + kk] + 0.5 * vel_pred_y[(jj - 1) * width + kk + 1]);
+            ftype div_xy = (fx_yp - fx_ym) / _DX;
+
+            ftype vz_at_x = (is_last_col && kk == VLEN - 1)
+                ? 0.5 * (vel_pred_z[jj * width + kk] + bc_right_z_val)
+                : 0.5 * (vel_pred_z[jj * width + kk] + vel_pred_z[jj * width + kk + 1]);
+            ftype fx_zp = (is_last_face && i == depth - 1)
+                ? bc_back_x_val * vz_at_x
+                : (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[jj * width + kk + height * width]) * vz_at_x;
+            ftype fx_zm = (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[jj * width + kk - height * width]) *
+                          (0.5 * vel_pred_z[jj * width + kk - height * width] + 0.5 * vel_pred_z[jj * width + kk - height * width + 1]);
+            ftype div_xz = (fx_zp - fx_zm) / _DX;
+
+            ftype vx_dx;
+            if (is_last_col && kk == VLEN - 1) {
+#ifdef FLOW_PAST_CUBE
+                vx_dx = (vel_pred_x[jj * width + kk] -
+                         vel_pred_x[jj * width + kk - 1]) / (2 * _DX);
+#else
+                /* 2nd-order asymmetric boundary differencing: */
+                vx_dx = ((ftype) (4.0 / 3.0) * bc_right_x_val -
+                         vel_pred_x[jj * width + kk] -
+                         (ftype) (1.0 / 3.0) * vel_pred_x[jj * width + kk - 1]) / _DX;
+#endif
+            } else {
+                vx_dx = (vel_pred_x[jj * width + kk + 1] -
+                         vel_pred_x[jj * width + kk - 1]) / (2 * _DX);
+            }
+
+            rhs_x_t[jj * VLEN + kk] -= 0.5 * (
+                vel_pred_x[jj * width + kk] * vx_dx +
 
                 vy_avg * vx_dy +
 
                 vz_avg * vx_dz +
 
-                0 * (((0.5 * vel_pred_x[jj * width + kk + 1] + 0.5 * vel_pred_x[jj * width + kk]) *
-                 (0.5 * vel_pred_x[jj * width + kk + 1] + 0.5 * vel_pred_x[jj * width + kk]) -
-                 (0.5 * vel_pred_x[jj * width + kk - 1] + 0.5 * vel_pred_x[jj * width + kk]) *
-                 (0.5 * vel_pred_x[jj * width + kk - 1] + 0.5 * vel_pred_x[jj * width + kk])) / _DX +
-
-                ((0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[(jj + 1) * width + kk]) *
-                 vy_tr -
-                 (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[(jj - 1) * width + kk]) *
-                 (0.5 * vel_pred_y[(jj - 1) * width + kk] + 0.5 * vel_pred_y[(jj - 1) * width + kk + 1])) / _DX +
-
-                ((0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[jj * width + kk + height * width]) *
-                 (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[jj * width + kk + 1]) -
-                 (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[jj * width + kk - height * width]) *
-                 (0.5 * vel_pred_z[jj * width + kk - height * width] +
-                  0.5 * vel_pred_z[jj * width + kk - height * width + 1])) / _DX)
+                (div_xx + div_xy + div_xz)
             );
 
             ftype vx_avg = 0.25 * (vel_pred_x[jj * width + kk] +
@@ -1180,22 +1228,10 @@ void compute_rhs_vtile(const ftype *restrict k_x,
                 vy_dx = (vel_pred_y[jj * width + kk] -
                          vel_pred_y[jj * width + kk - 1]) / (2 * _DX);
 #else
-                vftype vy, vy_old, _x, _z;
-                _get_right_bc_u(k + kk, j, i, timestep, &_x, &vy, &_z);
-                _get_right_bc_u(k + kk, j, i, timestep - 1, &_x, &vy_old, &_z);
-                ftype tmp[VLEN], tmp_old[VLEN];
-                vstore(tmp, vy);
-                vstore(tmp_old, vy_old);
-
                 /* 2nd-order asymmetric boundary differencing: */
-                vy_dx = ((ftype) (4.0 / 3.0) * 0.5 * (tmp[jj] + tmp_old[jj]) -
+                vy_dx = ((ftype) (4.0 / 3.0) * bc_right_y_val -
                          vel_pred_y[jj * width + kk] -
                          (ftype) (1.0 / 3.0) * vel_pred_y[jj * width + kk - 1]) / _DX;
-                /* Lower-order midpoint alternative:
-                vy_dx = (0.5 * (tmp[jj] + tmp_old[jj]) -
-                         0.5 * (vel_pred_y[jj * width + kk] +
-                                vel_pred_y[jj * width + kk - 1])) / _DX;
-                */
 #endif
             } else {
                 vy_dx = (vel_pred_y[jj * width + kk + 1] -
@@ -1204,52 +1240,61 @@ void compute_rhs_vtile(const ftype *restrict k_x,
 
             ftype vy_dz;
             if (is_last_face && i == depth - 1) {
-                vftype vy, vy_old, _x, _z;
-                _get_back_bc_u(k, j + jj, i, timestep, &_x, &vy, &_z);
-                _get_back_bc_u(k, j + jj, i, timestep - 1, &_x, &vy_old, &_z);
-                ftype tmp[VLEN], tmp_old[VLEN];
-                vstore(tmp, vy);
-                vstore(tmp_old, vy_old);
-
                 /* 2nd-order asymmetric boundary differencing: */
-                vy_dz = ((ftype) (4.0 / 3.0) * 0.5 * (tmp[kk] + tmp_old[kk]) -
+                vy_dz = ((ftype) (4.0 / 3.0) * bc_back_y_val -
                          vel_pred_y[jj * width + kk] -
                          (ftype) (1.0 / 3.0) * vel_pred_y[jj * width + kk - height * width]) / _DX;
-                /* Lower-order midpoint alternative:
-                vy_dz = (0.5 * (tmp[kk] + tmp_old[kk]) -
-                         0.5 * (vel_pred_y[jj * width + kk] +
-                                vel_pred_y[jj * width + kk - height * width])) / _DX;
-                */
             } else {
                 vy_dz = (vel_pred_y[jj * width + kk + height * width] -
                          vel_pred_y[jj * width + kk - height * width]) / (2 * _DX);
             }
 
-            rhs_y_t[jj * VLEN + kk] -= 1.0 * (
+            ftype vy_dy;
+            if (is_last_row && jj == VLEN - 1) {
+                /* 2nd-order asymmetric boundary differencing: */
+                vy_dy = ((ftype) (4.0 / 3.0) * bc_bot_y_val -
+                         vel_pred_y[jj * width + kk] -
+                         (ftype) (1.0 / 3.0) * vel_pred_y[(jj - 1) * width + kk]) / _DX;
+            } else {
+                vy_dy = (vel_pred_y[(jj + 1) * width + kk] -
+                         vel_pred_y[(jj - 1) * width + kk]) / (2 * _DX);
+            }
+
+            /* Conservative fluxes for y-momentum */
+            ftype vx_at_y = (is_last_row && jj == VLEN - 1)
+                ? 0.5 * (vel_pred_x[jj * width + kk] + bc_bot_x_val)
+                : 0.5 * (vel_pred_x[jj * width + kk] + vel_pred_x[(jj + 1) * width + kk]);
+            ftype fy_xp = (is_last_col && kk == VLEN - 1)
+                ? bc_right_y_val * vx_at_y
+                : (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk + 1]) * vx_at_y;
+            ftype fy_xm = (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk - 1]) *
+                          (0.5 * vel_pred_x[jj * width + kk - 1] + 0.5 * vel_pred_x[(jj + 1) * width + kk - 1]);
+            ftype div_yx = (fy_xp - fy_xm) / _DX;
+
+            ftype fy_yp = (is_last_row && jj == VLEN - 1)
+                ? 0.5 * (vel_pred_y[jj * width + kk] + bc_bot_y_val)
+                : 0.5 * (vel_pred_y[jj * width + kk] + vel_pred_y[(jj + 1) * width + kk]);
+            ftype fy_ym = 0.5 * (vel_pred_y[jj * width + kk] + vel_pred_y[(jj - 1) * width + kk]);
+            ftype div_yy = (fy_yp * fy_yp - fy_ym * fy_ym) / _DX;
+
+            ftype vz_at_y = (is_last_row && jj == VLEN - 1)
+                ? 0.5 * (vel_pred_z[jj * width + kk] + bc_bot_z_val)
+                : 0.5 * (vel_pred_z[jj * width + kk] + vel_pred_z[(jj + 1) * width + kk]);
+            ftype fy_zp = (is_last_face && i == depth - 1)
+                ? bc_back_y_val * vz_at_y
+                : (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk + height * width]) * vz_at_y;
+            ftype fy_zm = (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk - height * width]) *
+                          (0.5 * vel_pred_z[jj * width + kk - height * width] + 0.5 * vel_pred_z[(jj + 1) * width + kk - height * width]);
+            ftype div_yz = (fy_zp - fy_zm) / _DX;
+
+            rhs_y_t[jj * VLEN + kk] -= 0.5 * (
                 vx_avg * vy_dx +
 
-                vel_pred_y[jj * width + kk] *
-                    (vel_pred_y[(jj + 1) * width + kk] -
-                     vel_pred_y[(jj - 1) * width + kk]) / (2 * _DX) +
+                vel_pred_y[jj * width + kk] * vy_dy +
 
                 vz_avg * vy_dz +
 
-                0 * (
-                ((0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk + 1]) *
-                 (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[(jj + 1) * width + kk]) -
-                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk - 1]) *
-                 (0.5 * vel_pred_x[jj * width + kk - 1] + 0.5 * vel_pred_x[(jj + 1) * width + kk - 1])) / _DX +
-
-                ((0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[(jj + 1) * width + kk]) *
-                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[(jj + 1) * width + kk]) -
-                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[(jj - 1) * width + kk]) *
-                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[(jj - 1) * width + kk])) / _DX +
-
-                ((0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk + height * width]) *
-                 (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[(jj + 1) * width + kk]) -
-                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk - height * width]) *
-                 (0.5 * vel_pred_z[jj * width + kk - height * width] +
-                  0.5 * vel_pred_z[(jj + 1) * width + kk - height * width])) / _DX)
+                (div_yx + div_yy + div_yz)
             );
 
             vx_avg = 0.25 * (vel_pred_x[jj * width + kk] +
@@ -1268,22 +1313,10 @@ void compute_rhs_vtile(const ftype *restrict k_x,
                 vz_dx = (vel_pred_z[jj * width + kk] -
                          vel_pred_z[jj * width + kk - 1]) / (2 * _DX);
 #else
-                vftype vz, vz_old, _x, _y;
-                _get_right_bc_u(k + kk, j, i, timestep, &_x, &_y, &vz);
-                _get_right_bc_u(k + kk, j, i, timestep - 1, &_x, &_y, &vz_old);
-                ftype tmp[VLEN], tmp_old[VLEN];
-                vstore(tmp, vz);
-                vstore(tmp_old, vz_old);
-
                 /* 2nd-order asymmetric boundary differencing: */
-                vz_dx = ((ftype) (4.0 / 3.0) * 0.5 * (tmp[jj] + tmp_old[jj]) -
+                vz_dx = ((ftype) (4.0 / 3.0) * bc_right_z_val -
                          vel_pred_z[jj * width + kk] -
                          (ftype) (1.0 / 3.0) * vel_pred_z[jj * width + kk - 1]) / _DX;
-                /* Lower-order midpoint alternative:
-                vz_dx = (0.5 * (tmp[jj] + tmp_old[jj]) -
-                         0.5 * (vel_pred_z[jj * width + kk] +
-                                vel_pred_z[jj * width + kk - 1])) / _DX;
-                */
 #endif
             } else {
                 vz_dx = (vel_pred_z[jj * width + kk + 1] -
@@ -1292,51 +1325,61 @@ void compute_rhs_vtile(const ftype *restrict k_x,
 
             ftype vz_dy;
             if (is_last_row && jj == VLEN - 1) {
-                vftype vz, vz_old, _x, _y;
-                _get_bottom_bc_u(k, j + jj, i, timestep, &_x, &_y, &vz);
-                _get_bottom_bc_u(k, j + jj, i, timestep - 1, &_x, &_y, &vz_old);
-                ftype tmp[VLEN], tmp_old[VLEN];
-                vstore(tmp, vz);
-                vstore(tmp_old, vz_old);
-
                 /* 2nd-order asymmetric boundary differencing: */
-                vz_dy = ((ftype) (4.0 / 3.0) * 0.5 * (tmp[kk] + tmp_old[kk]) -
+                vz_dy = ((ftype) (4.0 / 3.0) * bc_bot_z_val -
                          vel_pred_z[jj * width + kk] -
                          (ftype) (1.0 / 3.0) * vel_pred_z[(jj - 1) * width + kk]) / _DX;
-                /* Lower-order midpoint alternative:
-                vz_dy = (0.5 * (tmp[kk] + tmp_old[kk]) -
-                         0.5 * (vel_pred_z[jj * width + kk] +
-                                vel_pred_z[(jj - 1) * width + kk])) / _DX;
-                */
             } else {
                 vz_dy = (vel_pred_z[(jj + 1) * width + kk] -
                          vel_pred_z[(jj - 1) * width + kk]) / (2 * _DX);
             }
 
-            rhs_z_t[jj * VLEN + kk] -= 1.0 * (
+            ftype vz_dz;
+            if (is_last_face && i == depth - 1) {
+                /* 2nd-order asymmetric boundary differencing: */
+                vz_dz = ((ftype) (4.0 / 3.0) * bc_back_z_val -
+                         vel_pred_z[jj * width + kk] -
+                         (ftype) (1.0 / 3.0) * vel_pred_z[jj * width + kk - height * width]) / _DX;
+            } else {
+                vz_dz = (vel_pred_z[jj * width + kk + height * width] -
+                         vel_pred_z[jj * width + kk - height * width]) / (2 * _DX);
+            }
+
+            /* Conservative fluxes for z-momentum */
+            ftype vx_at_z = (is_last_face && i == depth - 1)
+                ? 0.5 * (vel_pred_x[jj * width + kk] + bc_back_x_val)
+                : 0.5 * (vel_pred_x[jj * width + kk] + vel_pred_x[jj * width + kk + height * width]);
+            ftype fz_xp = (is_last_col && kk == VLEN - 1)
+                ? bc_right_z_val * vx_at_z
+                : (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[jj * width + kk + 1]) * vx_at_z;
+            ftype fz_xm = (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[jj * width + kk - 1]) *
+                          (0.5 * vel_pred_x[jj * width + kk - 1] + 0.5 * vel_pred_x[jj * width + kk - 1 + height * width]);
+            ftype div_zx = (fz_xp - fz_xm) / _DX;
+
+            ftype vy_at_z = (is_last_face && i == depth - 1)
+                ? 0.5 * (vel_pred_y[jj * width + kk] + bc_back_y_val)
+                : 0.5 * (vel_pred_y[jj * width + kk] + vel_pred_y[jj * width + kk + height * width]);
+            ftype fz_yp = (is_last_row && jj == VLEN - 1)
+                ? bc_bot_z_val * vy_at_z
+                : (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[(jj + 1) * width + kk]) * vy_at_z;
+            ftype fz_ym = (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[(jj - 1) * width + kk]) *
+                          (0.5 * vel_pred_y[(jj - 1) * width + kk] + 0.5 * vel_pred_y[(jj - 1) * width + kk + height * width]);
+            ftype div_zy = (fz_yp - fz_ym) / _DX;
+
+            ftype fz_zp = (is_last_face && i == depth - 1)
+                ? 0.5 * (bc_back_z_val + vel_pred_z[jj * width + kk])
+                : 0.5 * (vel_pred_z[jj * width + kk + height * width] + vel_pred_z[jj * width + kk]);
+            ftype fz_zm = 0.5 * (vel_pred_z[jj * width + kk - height * width] + vel_pred_z[jj * width + kk]);
+            ftype div_zz = (fz_zp * fz_zp - fz_zm * fz_zm) / _DX;
+
+            rhs_z_t[jj * VLEN + kk] -= 0.5 * (
                 vx_avg * vz_dx +
 
                 vy_avg * vz_dy +
 
-                vel_pred_z[jj * width + kk] *
-                    (vel_pred_z[jj * width + kk + height * width] -
-                     vel_pred_z[jj * width + kk - height * width]) / (2 * _DX) +
+                vel_pred_z[jj * width + kk] * vz_dz +
 
-                0 * (
-                ((0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[jj * width + kk + 1]) *
-                 (0.5 * vel_pred_x[jj * width + kk] + 0.5 * vel_pred_x[jj * width + kk + height * width]) -
-                 (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[jj * width + kk - 1]) *
-                 (0.5 * vel_pred_x[jj * width + kk - 1] + 0.5 * vel_pred_x[jj * width + kk - 1 + height * width])) / _DX +
-
-                ((0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[(jj + 1) * width + kk]) *
-                 (0.5 * vel_pred_y[jj * width + kk] + 0.5 * vel_pred_y[jj * width + kk + height * width]) -
-                 (0.5 * vel_pred_z[jj * width + kk] + 0.5 * vel_pred_z[(jj - 1) * width + kk]) *
-                 (0.5 * vel_pred_y[(jj - 1) * width + kk] + 0.5 * vel_pred_y[(jj - 1) * width + kk + height * width])) / _DX +
-
-                ((0.5 * vel_pred_z[jj * width + kk + height * width] + 0.5 * vel_pred_z[jj * width + kk]) *
-                 (0.5 * vel_pred_z[jj * width + kk + height * width] + 0.5 * vel_pred_z[jj * width + kk]) -
-                 (0.5 * vel_pred_z[jj * width + kk - height * width] + 0.5 * vel_pred_z[jj * width + kk]) *
-                 (0.5 * vel_pred_z[jj * width + kk - height * width] + 0.5 * vel_pred_z[jj * width + kk])) / _DX)
+                (div_zx + div_zy + div_zz)
             );
         }
     }

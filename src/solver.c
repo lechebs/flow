@@ -75,11 +75,21 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
                 ftype y = j * _DX;
                 ftype z = i * _DX;
 
+                /* Sphere obstacle (radius R = 0.09, diameter D = 0.18): */
+                double cx = _DX * domain_size.width * 0.25;
+                double cy = _DX * domain_size.height * 0.5;
+                double cz = _DX * domain_size.depth * 0.5;
+                double sdf = sqrt((x - cx) * (x - cx) +
+                                  (y - cy) * (y - cy) +
+                                  (z - cz) * (z - cz)) - 0.09;
+
+                /* Cube obstacle:
                 double sdf = pow(pow(y - _DX * domain_size.height * 0.5, 8) +
                                  pow(x - _DX * domain_size.width * 0.25, 8) +
                                  pow(z - _DX * domain_size.depth * 0.5, 8), 1.0 / 8) - 0.09;
+                */
 
-                double exp = 8 * tanh(sdf * 30);
+                double exp = 8 * tanh(sdf * 20);
                 tmp.x[idx] = pow(10, exp);
                 tmp.y[idx] = pow(10, exp);
                 tmp.z[idx] = pow(10, exp);

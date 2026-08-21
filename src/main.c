@@ -23,14 +23,14 @@ static ftype bc_zero(ftype x, ftype y, ftype z, ftype t)
 #define FINAL_TIME 15.0
 
 DEFINE_NU(0.0003)
-DEFINE_DT(0.001)
+DEFINE_DT(0.0005)
 DEFINE_DX(0.00375)
 
 DEFINE_CONSTANT_FORCING(0, 0, 0)
 
 static ftype bc_inlet(ftype x, ftype y, ftype z, ftype t)
 {
-    return 2 * (1.0 - exp(-t));
+    return 1 * (1.0 - exp(-t));
 }
 
 DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_LEFT)
@@ -42,15 +42,15 @@ DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_BOTTOM)
 DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_FRONT)
 DEFINE_FUNCTION_BC_U(bc_inlet, bc_zero, bc_zero, BC_BACK)
 #else
-#define DEPTH 128
-#define HEIGHT 128
-#define WIDTH 128
+#define DEPTH 256
+#define HEIGHT 256
+#define WIDTH 256
 
-#define FINAL_TIME 10.0
+#define FINAL_TIME 20.0
 
-DEFINE_NU(0.0005)
+DEFINE_NU(0.00015)
 DEFINE_DT(0.001)
-DEFINE_DX(1.0 / 128.0)
+DEFINE_DX(1.0 / WIDTH)
 
 DEFINE_CONSTANT_FORCING(0, 0, 0)
 
@@ -74,6 +74,39 @@ typedef struct {
     OutputVTK *output;
 } SimulationData;
 
+static int check_blowup(const_field3 vel, field_size size, Thread *t_data, ftype threshold)
+{
+    static volatile int blown_up = 0;
+    uint32_t t_id = t_data->t_id;
+    uint32_t num_threads = thread_get_array_size(t_data);
+
+    if (t_id == 0) {
+        blown_up = 0;
+    }
+    thread_wait_on_barrier(t_data);
+
+    uint32_t z_start = (size.depth * t_id) / num_threads;
+    uint32_t z_end = (size.depth * (t_id + 1)) / num_threads;
+    uint64_t slice_start = (uint64_t) z_start * size.height * size.width;
+    uint64_t slice_size = (uint64_t) (z_end - z_start) * size.height * size.width;
+
+    const ftype *vx = vel.x + slice_start;
+    const ftype *vy = vel.y + slice_start;
+    const ftype *vz = vel.z + slice_start;
+
+    for (uint64_t i = 0; i < slice_size; ++i) {
+        if (fabs(vx[i]) > threshold || fabs(vy[i]) > threshold ||
+            fabs(vz[i]) > threshold || isnan(vx[i]) || isnan(vy[i]) ||
+            isnan(vz[i])) {
+            blown_up = 1;
+            break;
+        }
+    }
+
+    thread_wait_on_barrier(t_data);
+    return blown_up;
+}
+
 static void *run_simulation(void *t_data)
 {
     ArenaAllocator *arena = thread_get_arena(t_data);
@@ -83,19 +116,39 @@ static void *run_simulation(void *t_data)
     OutputVTK *output = sim_data->output;
 
     uint32_t t_id = ((Thread *) t_data)->t_id;
-    output_vtk_write(output, "output/solution-cavity-0.vtk", t_data);
+
+    char output_file_name[64];
+    sprintf(output_file_name, "output/solution-flow-past-sphere-%d-0.vtk", WIDTH);
+    output_vtk_write(output, output_file_name, t_data);
     thread_wait_on_barrier(t_data);
 
     uint32_t num_timesteps = (FINAL_TIME - _DT / 2) / _DT + 1;
+    field_size domain_size = { WIDTH, HEIGHT, DEPTH };
 
     TIMER_CREATE(solver_step_aggregate);
     for (uint32_t t = 1; t < num_timesteps + 1; ++t) {
         TIMER_RESTART(solver_step_aggregate);
         solver_step(solver, t, t_data);
 
-        if (t % 100 == 0) {
+        if (check_blowup(solver_get_velocity(solver), domain_size,
+                         (Thread *) t_data, 10.0)) {
+            if (t_id == 0) {
+                printf("\n[BLOWUP] Simulation blew up at timestep %u (t = %.4f s)\n",
+                       t, t * _DT);
+            }
+            break;
+        }
+
+        if (t == num_timesteps) {
+            if (t_id == 0) {
+                printf("\n[STABLE] Simulation completed %u timesteps without blowup (t = %.4f s)\n",
+                       t, t * _DT);
+            }
+        }
+
+        if (t % 200 == 0) {
             char output_file_name[64];
-            sprintf(output_file_name, "output/solution-cavity-%d.vtk", t);
+            sprintf(output_file_name, "output/solution-flow-past-sphere-%d-%d.vtk", WIDTH, t);
             output_vtk_write(output, output_file_name, t_data);
         }
 
