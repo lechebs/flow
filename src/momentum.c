@@ -875,8 +875,7 @@ void compute_Dxx_Dyy_Dzz(const ftype *restrict eta,
 
 static inline __attribute__((always_inline))
 void compute_rhs_vtile(const ftype *restrict porosity,
-                       const ftype *restrict p,
-                       const ftype *restrict phi,
+                       const ftype *restrict pp,
                        const ftype *restrict eta_x,
                        const ftype *restrict eta_y,
                        const ftype *restrict eta_z,
@@ -900,17 +899,14 @@ void compute_rhs_vtile(const ftype *restrict porosity,
                        ftype *restrict rhs_y_t,
                        ftype *restrict rhs_z_t)
 {
-    def_vtile(pp);
-    /* Computing pressure predictor for current tile. */
-    load_vtile(p, width, pp);
-    load_vtile_add(phi, width, pp);
+    def_vtile(ppt);
+    load_vtile(pp, width, ppt);
 
     if (!is_last_face) {
         def_vtile(ppz);
-        load_vtile(p + height * width, width, ppz);
-        load_vtile_add(phi + height * width, width, ppz);
+        load_vtile(pp + height * width, width, ppz);
         /* Computing pressure predictor z derivative. */
-        fin_diff_vtiles(ppz, pp, ppz);
+        fin_diff_vtiles(ppz, ppt, ppz);
         store_vtile(rhs_z_t, VLEN, ppz);
     } else {
         vftype zeros = vbroadcast(0);
@@ -928,43 +924,43 @@ void compute_rhs_vtile(const ftype *restrict porosity,
 
     /* Load additional row and compute dpp/dy. */
 #ifdef FLOAT
-    vftype pp8;
+    vftype ppt8;
     if (is_last_row) {
-        pp8 = pp7; /* Such that y derivative is zero. */
+        ppt8 = ppt7; /* Such that y derivative is zero. */
     } else {
-        pp8 = vload(p + width * VLEN) + vload(phi + width * VLEN);
+        ppt8 = vload(pp + width * VLEN)
     }
 #else
-    vftype pp4;
+    vftype ppt4;
     if (is_last_row) {
-        pp4 = pp3; /* Such that y derivative is zero. */
+        ppt4 = ppt3; /* Such that y derivative is zero. */
     } else {
-        pp4 = vload(p + width * VLEN) + vload(phi + width * VLEN);
+        ppt4 = vload(pp + width * VLEN);
     }
 #endif
     def_vtile(ppy);
-    fin_diff_vtile(pp, ppy);
+    fin_diff_vtile(ppt, ppy);
     store_vtile(rhs_y_t, VLEN, ppy);
 
     /* NOTE: Why not using vloadu? */
-    transpose_vtile_ip(pp);
+    transpose_vtile_ip(ppt);
     /* Compute dpp/dx. */
 #ifdef FLOAT
     if (is_last_col) {
-        pp8 = pp7; /* Such that x derivative is zero. */
+        ppt8 = ppt7; /* Such that x derivative is zero. */
     } else {
-        pp8 = vgather(p + VLEN, width) + vgather(phi + VLEN, width);
+        ppt8 = vgather(pp + VLEN, width);
     }
 #else
     if (is_last_col) {
-        pp4 = pp3; /* Such that x derivative is zero. */
+        ppt4 = ppt3; /* Such that x derivative is zero. */
     } else {
-        pp4 = vgather(p + VLEN, width) + vgather(phi + VLEN, width);
+        ppt4 = vgather(pp + VLEN, width);
     }
 #endif
-    fin_diff_vtile(pp, pp);
-    transpose_vtile_ip(pp);
-    store_vtile(rhs_x_t, VLEN, pp);
+    fin_diff_vtile(ppt, ppt);
+    transpose_vtile_ip(ppt);
+    store_vtile(rhs_x_t, VLEN, ppt);
 
     compute_Dxx_Dyy_Dzz(eta_x, zeta_x, vel_x,
                         is_last_face, is_last_row, is_last_col, COMPONENT_X,
@@ -1018,8 +1014,7 @@ void compute_rhs_vtile(const ftype *restrict porosity,
 static inline __attribute__((always_inline))
 void solve_vtile_row(const ftype *restrict porosity,
                      const ftype *restrict w,
-                     const ftype *restrict p,
-                     const ftype *restrict phi,
+                     const ftype *restrict pp,
                      ftype *restrict eta_x,
                      ftype *restrict eta_y,
                      ftype *restrict eta_z,
@@ -1052,7 +1047,7 @@ void solve_vtile_row(const ftype *restrict porosity,
 
     transpose_vtile(w, width, VLEN, w_t);
 
-    compute_rhs_vtile(porosity, p, phi, eta_x, eta_y, eta_z,
+    compute_rhs_vtile(porosity, pp, eta_x, eta_y, eta_z,
                       zeta_x, zeta_y, zeta_z, vel_x, vel_y, vel_z,
                       is_last_face, is_last_row, INNER_COL,
                       i, j, 0, depth, height, width, timestep,
@@ -1078,7 +1073,7 @@ void solve_vtile_row(const ftype *restrict porosity,
         /* Load and transpose next tile. */
         transpose_vtile(w + tk, width, VLEN, w_t);
 
-        compute_rhs_vtile(porosity + tk, p + tk, phi + tk,
+        compute_rhs_vtile(porosity + tk, pp + tk,
                           eta_x + tk, eta_y + tk, eta_z + tk,
                           zeta_x + tk, zeta_y + tk, zeta_z + tk,
                           vel_x + tk, vel_y + tk, vel_z + tk,
@@ -1101,8 +1096,7 @@ void solve_vtile_row(const ftype *restrict porosity,
     transpose_vtile(w + width - VLEN, width, VLEN, w_t);
 
     compute_rhs_vtile(porosity + width - VLEN,
-                      p + width - VLEN,
-                      phi + width - VLEN,
+                      pp + width - VLEN,
                       eta_x + width - VLEN,
                       eta_y + width - VLEN,
                       eta_z + width - VLEN,
@@ -1192,8 +1186,7 @@ void solve_vtile_row(const ftype *restrict porosity,
 
 static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                                        const ftype *restrict w,
-                                       const ftype *restrict p,
-                                       const ftype *restrict phi,
+                                       const ftype *restrict pp,
                                        ftype *restrict eta_x,
                                        ftype *restrict eta_y,
                                        ftype *restrict eta_z,
@@ -1228,7 +1221,7 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
         for (uint32_t j = 0; j < height - VLEN; j += VLEN) {
             /* Solving each row of tiles, except the last. */
             uint64_t off = height * width * i + width * j;
-            solve_vtile_row(k + off, w + off, p + off, phi + off,
+            solve_vtile_row(k + off, w + off, pp + off,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
@@ -1237,7 +1230,7 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
         }
         /* Solving each tile of the last row. */
         uint64_t off = height * width * i + width * (height - VLEN);
-        solve_vtile_row(k + off, w + off, p + off, phi + off, 
+        solve_vtile_row(k + off, w + off, pp + off,
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
@@ -1253,7 +1246,7 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
         /* Solving the last face of the domain. */
         for (uint32_t j = 0; j < height - VLEN; j += VLEN) {
             uint64_t off = height * width * (depth - 1) + width * j;
-            solve_vtile_row(k + off, w + off, p + off, phi + off,
+            solve_vtile_row(k + off, w + off, pp + off,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
@@ -1261,7 +1254,7 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
                             LAST_FACE, INNER_ROW, tmp);
         }
         uint64_t off = height * width * (depth - 1) + width * (height - VLEN);
-        solve_vtile_row(k + off, w + off, p + off, phi + off,
+        solve_vtile_row(k + off, w + off, pp + off,
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
@@ -1273,7 +1266,7 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
         for (uint32_t j = 0; j < height - VLEN; j += VLEN) {
             /* Solving each row of tiles, except the last. */
             uint64_t off = height * width * (depth - (t_id + 1)) + width * j;
-            solve_vtile_row(k + off, w + off, p + off, phi + off,
+            solve_vtile_row(k + off, w + off, pp + off,
                             eta_x + off, eta_y + off, eta_z + off,
                             zeta_x + off, zeta_y + off, zeta_z + off,
                             vel_x + off, vel_y + off, vel_z + off,
@@ -1284,7 +1277,7 @@ static void solve_Dxx_blocks_fused_rhs(const ftype *restrict k,
         /* Solving each tile of the last row. */
         uint64_t off = height * width * (depth - (t_id + 1)) +
                        width * (height - VLEN);
-        solve_vtile_row(k + off, w + off, p + off, phi + off, 
+        solve_vtile_row(k + off, w + off, pp + off,
                         eta_x + off, eta_y + off, eta_z + off,
                         zeta_x + off, zeta_y + off, zeta_z + off,
                         vel_x + off, vel_y + off, vel_z + off,
@@ -1900,8 +1893,7 @@ void momentum_init(field_size size, field3 field)
 
 void momentum_solve(const_field porosity,
                     const_field gamma,
-                    const_field pressure,
-                    const_field pressure_delta,
+                    const_field pressure_pred,
                     field_size size,
                     field3 velocity_Dxx,
                     field3 velocity_Dyy,
@@ -1942,7 +1934,7 @@ void momentum_solve(const_field porosity,
     TIMER_RESTART(solve_momentum_Dxx_blocks_fused_rhs);
 
     solve_Dxx_blocks_fused_rhs(
-        porosity, gamma, pressure, pressure_delta,
+        porosity, gamma, pressure_pred,
         velocity_Dxx.x, velocity_Dxx.y, velocity_Dxx.z,
         velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
         velocity_Dzz.x, velocity_Dzz.y, velocity_Dzz.z,

@@ -10,7 +10,7 @@ void pressure_init(field_size size, field field);
 void pressure_solve(const_field3 velocity,
                     field_size size,
                     field pressure,
-                    field pressure_delta,
+                    field pressure_pred,
                     uint32_t timestep,
                     Thread *thread);
 

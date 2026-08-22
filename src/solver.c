@@ -12,7 +12,7 @@ struct Solver {
     field porosity;
     field gamma;
     field pressure;
-    field pressure_delta;
+    field pressure_pred;
     field3 velocity_Dxx;
     field3 velocity_Dyy;
     field3 velocity_Dzz;
@@ -35,7 +35,7 @@ Solver *solver_alloc(uint32_t domain_depth,
     solver->porosity = field_alloc(domain_size, arena);
     solver->gamma = field_alloc(domain_size, arena);
     solver->pressure = field_alloc(domain_size, arena);
-    solver->pressure_delta = field_alloc(domain_size, arena);
+    solver->pressure_pred = field_alloc(domain_size, arena);
 
     solver->velocity_Dxx = field3_alloc_pad(domain_size, arena);
     solver->velocity_Dyy = field3_alloc_pad(domain_size, arena);
@@ -53,7 +53,7 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
     momentum_init(domain_size, solver->velocity_Dzz);
 
     pressure_init(domain_size, solver->pressure);
-    pressure_init(domain_size, solver->pressure_delta);
+    pressure_init(domain_size, solver->pressure_pred);
 
     arena_enter(arena);
 
@@ -94,8 +94,7 @@ void solver_step(Solver *solver, uint32_t timestep, Thread *thread)
 {
     momentum_solve(solver->porosity,
                    solver->gamma,
-                   solver->pressure,
-                   solver->pressure_delta,
+                   solver->pressure_pred,
                    solver->domain_size,
                    solver->velocity_Dxx,
                    solver->velocity_Dyy,
@@ -106,7 +105,7 @@ void solver_step(Solver *solver, uint32_t timestep, Thread *thread)
     pressure_solve(to_const_field3(solver->velocity_Dzz),
                    solver->domain_size,
                    solver->pressure,
-                   solver->pressure_delta,
+                   solver->pressure_pred,
                    timestep,
                    thread);
 }

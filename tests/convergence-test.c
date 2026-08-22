@@ -122,7 +122,7 @@ struct SolverData {
     field porosity;
     field gamma;
     field pressure;
-    field phi;
+    field pressure_pred;
     field3 eta;
     field3 zeta;
     field3 vel;
@@ -139,7 +139,7 @@ static void *solve_brinkman(void *thread)
     field porosity = solver_data->porosity;
     field gamma = solver_data->gamma;
     field pressure = solver_data->pressure;
-    field phi = solver_data->phi;
+    field pressure_pred = solver_data->pressure_pred;
     field3 eta = solver_data->eta;
     field3 zeta = solver_data->zeta;
     field3 vel = solver_data->vel;
@@ -166,7 +166,7 @@ static void *solve_brinkman(void *thread)
             }
         }
 
-        momentum_solve(porosity, gamma, pressure, phi,
+        momentum_solve(porosity, gamma, pressure_pred,
                        size, eta, zeta, vel, t, thread);
 
         /*
@@ -191,7 +191,8 @@ static void *solve_brinkman(void *thread)
         arena_exit(arena);
         */
 
-        pressure_solve(to_const_field3(vel), size, pressure, phi, t, thread);
+        pressure_solve(to_const_field3(vel), size, pressure,
+                       pressure_pred, t, thread);
  
         thread_wait_on_barrier(thread);
 
@@ -262,13 +263,13 @@ DEF_TEST(test_convergence_space,
         field3_fill(size, 0, vel);
 
         field pressure = field_alloc(size, arena);
-        field phi = field_alloc(size, arena);
+        field pressure_pred = field_alloc(size, arena);
 
         compute_manufactured_solution(size, 0, eta);
         compute_manufactured_solution(size, 0, zeta);
         compute_manufactured_solution(size, 0, vel);
         compute_manufactured_pressure(size, 0.5, pressure);
-        field_fill(size, 0, phi);
+        compute_manufactured_pressure(size, 0.5, pressure_pred);
 
         field manufactured_pressure = field_alloc(size, arena);
         compute_manufactured_pressure(size, 0.5, manufactured_pressure);
@@ -290,7 +291,7 @@ DEF_TEST(test_convergence_space,
             porosity,
             gamma,
             pressure,
-            phi,
+            pressure_pred,
             eta,
             zeta,
             vel,
@@ -402,13 +403,13 @@ DEF_TEST(test_convergence_time,
         field3_fill(size, 0, vel);
 
         field pressure = field_alloc(size, arena);
-        field phi = field_alloc(size, arena);
+        field pressure_pred = field_alloc(size, arena);
 
         compute_manufactured_solution(size, 0, eta);
         compute_manufactured_solution(size, 0, zeta);
         compute_manufactured_solution(size, 0, vel);
         compute_manufactured_pressure(size, 0.5, pressure);
-        field_fill(size, 0, phi);
+        compute_manufactured_pressure(size, 0.5, pressure_pred);
 
         field manufactured_pressure = field_alloc(size, arena);
         compute_manufactured_pressure(size, 0.5, manufactured_pressure);
@@ -421,7 +422,7 @@ DEF_TEST(test_convergence_time,
             porosity,
             gamma,
             pressure,
-            phi,
+            pressure_pred,
             eta,
             zeta,
             vel
