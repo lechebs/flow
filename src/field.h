@@ -176,9 +176,9 @@ static inline double field3_l2_norm_diff(field_size size,
 {
     double norm = 0;
 
-    for (uint32_t i = 1; i < size.depth - 1; ++i) {
-        for (uint32_t j = 1; j < size.height - 1; ++j) {
-            for (uint32_t k = 1; k < size.width - 1; ++k) {
+    for (uint32_t i = 0; i < size.depth; ++i) {
+        for (uint32_t j = 0; j < size.height; ++j) {
+            for (uint32_t k = 0; k < size.width; ++k) {
                 uint64_t idx = size.height * size.width * i +
                                size.width * j + k;
 

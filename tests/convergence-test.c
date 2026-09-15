@@ -249,8 +249,8 @@ DEF_TEST(test_convergence_space,
     double *p_errors = arena_push_count(arena, double, num_samples);
     double *dxs = arena_push_count(arena, double, num_samples);
 
-    double T = 5e-6;
-    double dt = 1e-6;
+    double T = 1e-4;
+    double dt = 1e-5;
 
     SET_DT(dt);
 
@@ -537,8 +537,8 @@ int main(void)
     ArenaAllocator arena;
     arena_init(&arena, 1ul << 33);
 
-    RUN_TEST(test_convergence_space, &arena, 4, 4);
-    RUN_TEST(test_convergence_time, &arena, 4, 4);
+    RUN_TEST(test_convergence_space, &arena, 5, 4);
+    RUN_TEST(test_convergence_time, &arena, 5, 4);
 
     arena_destroy(&arena);
 }

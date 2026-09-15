@@ -79,9 +79,15 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
                 double cx = _DX * domain_size.width * 0.25;
                 double cy = _DX * domain_size.height * 0.5;
                 double cz = _DX * domain_size.depth * 0.5;
-                double sdf = sqrt((x - cx) * (x - cx) +
-                                  (y - cy) * (y - cy) +
-                                  (z - cz) * (z - cz)) - 0.09;
+
+                double sdf_x = sqrt((x + _DX / 2 - cx) *
+                                    (x + _DX / 2 - cx) +
+                                    (y - cy) * (y - cy)) - 0.09;
+                double sdf_y = sqrt((x - cx) * (x - cx) +
+                                    (y + _DX / 2 - cy) *
+                                    (y + _DX / 2 - cy)) - 0.09;
+                double sdf_z = sqrt((x - cx) * (x - cx) +
+                                    (y - cy) * (y - cy)) - 0.09;
 
                 /* Cube obstacle:
                 double sdf = pow(pow(y - _DX * domain_size.height * 0.5, 8) +
@@ -89,10 +95,12 @@ void solver_init(Solver *solver, ArenaAllocator *arena)
                                  pow(z - _DX * domain_size.depth * 0.5, 8), 1.0 / 8) - 0.09;
                 */
 
-                double exp = 8 * tanh(sdf * 20);
-                tmp.x[idx] = pow(10, exp);
-                tmp.y[idx] = pow(10, exp);
-                tmp.z[idx] = pow(10, exp);
+                double exp_x = 8 * tanh(sdf_x * 20);
+                double exp_y = 8 * tanh(sdf_y * 20);
+                double exp_z = 8 * tanh(sdf_z * 20);
+                tmp.x[idx] = pow(10, exp_x);
+                tmp.y[idx] = pow(10, exp_y);
+                tmp.z[idx] = pow(10, exp_z);
             }
         }
     }

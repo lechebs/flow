@@ -130,6 +130,7 @@ static void *run_simulation(void *t_data)
         TIMER_RESTART(solver_step_aggregate);
         solver_step(solver, t, t_data);
 
+        /*
         if (check_blowup(solver_get_velocity(solver), domain_size,
                          (Thread *) t_data, 10.0)) {
             if (t_id == 0) {
@@ -145,10 +146,13 @@ static void *run_simulation(void *t_data)
                        t, t * _DT);
             }
         }
+        */
 
         if (t % 200 == 0) {
             char output_file_name[64];
-            sprintf(output_file_name, "output/solution-flow-past-sphere-%d-%d.vtk", WIDTH, t);
+            sprintf(output_file_name,
+                    "output/solution-flow-past-sphere-kcorr-%d-%d.vtk",
+                    WIDTH, t);
             output_vtk_write(output, output_file_name, t_data);
         }
 
