@@ -1925,6 +1925,16 @@ void momentum_solve(const_field porosity,
 
     TIMER_RESTART(solve_momentum_Dxx_blocks_fused_rhs);
 
+#ifdef TARGET_CUDA
+    if (t_id == 0) {
+        launch_momentum_solve_Dxx(
+            porosity, gamma, pressure, pressure_delta,
+            size.depth, size.height, size.width, timestep, tmp,
+            velocity_Dxx.x, velocity_Dxx.y, velocity_Dxx.z,
+            velocity_Dyy.x, velocity_Dyy.y, velocity_Dyy.z,
+            velocity_Dzz.x, velocity_Dzz.y, velocity_Dzz.z);
+    }
+#else
     solve_Dxx_blocks_fused_rhs(
         porosity, gamma, pressure, pressure_delta,
         velocity_Dxx.x, velocity_Dxx.y, velocity_Dxx.z,
@@ -1932,6 +1942,7 @@ void momentum_solve(const_field porosity,
         velocity_Dzz.x, velocity_Dzz.y, velocity_Dzz.z,
         size.depth, size.height, size.width, timestep, tmp,
         t_id, num_threads);
+#endif
 
     thread_wait_on_barrier(thread);
     TIMER_ELAPSED(solve_momentum_Dxx_blocks_fused_rhs, t_id == 0);

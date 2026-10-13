@@ -13,6 +13,27 @@ struct BoundaryConditions
 {
     __device__ BoundaryConditions() {}
 
+    __device__ __forceinline__ ftype3 get_u_left(uint32_t x,
+                                                 uint32_t y,
+                                                 uint32_t z,
+                                                 uint32_t t) const
+    {
+        ftype3 u;
+
+        u.y = u_y(0, y * _D_DX + _D_DX / 2, z * _D_DX, t * _D_DT);
+        u.z = u_z(0, y * _D_DX, z * _D_DX + _D_DX / 2, t * _D_DT);
+
+        ftype duy_dy = u_y(0, y * _D_DX + _D_DX / 2, z * _D_DX, t * _D_DT) -
+                       u_y(0, y * _D_DX - _D_DX / 2, z * _D_DX, t * _D_DT);
+
+        ftype duz_dz = u_z(0, y * _D_DX, z * _D_DX + _D_DX / 2, t * _D_DT) -
+                       u_z(0, y * _D_DX, z * _D_DX - _D_DX / 2, t * _D_DT);
+
+        u.x = u_x(0, y * _D_DX, z * _D_DX, t * _D_DT) - (duy_dy + duz_dz) / 2;
+
+        return u;
+    }
+
     __device__ __forceinline__ ftype3 get_u_top(uint32_t x,
                                                 uint32_t y,
                                                 uint32_t z,
@@ -51,6 +72,23 @@ struct BoundaryConditions
                        u_y(x * _D_DX, y * _D_DX - _D_DX / 2, 0, t * _D_DT);
 
         u.z = u_z(x * _D_DX, y * _D_DX, 0, t * _D_DT) - (dux_dx + duy_dy) / 2;
+
+        return u;
+    }
+
+    __device__ __forceinline__ ftype3 get_u_right(uint32_t x,
+                                                  uint32_t y,
+                                                  uint32_t z,
+                                                  uint32_t t) const
+    {
+        ftype3 u;
+
+        u.x = u_x(
+            x * _D_DX + _D_DX / 2, y * _D_DX + _D_DX / 2, z * _D_DX, t * _D_DT);
+        u.y = u_y(
+            x * _D_DX, y * _D_DX + _D_DX / 2, z * _D_DX, t * _D_DT);
+        u.z = u_z(
+            x * _D_DX, y * _D_DX + _D_DX / 2, z * _D_DX + _D_DX / 2, t * _D_DT);
 
         return u;
     }
@@ -101,10 +139,12 @@ struct BoundaryConditions
                  u_curr.z - u_prev.z };                       \
     }
 
-    DEFINE_GET_U_DELTA(front)
-    DEFINE_GET_U_DELTA(back)
+    DEFINE_GET_U_DELTA(left)
+    DEFINE_GET_U_DELTA(right)
     DEFINE_GET_U_DELTA(top)
     DEFINE_GET_U_DELTA(bottom)
+    DEFINE_GET_U_DELTA(front)
+    DEFINE_GET_U_DELTA(back)
 
 #undef DEFINE_GET_U_DELTA
 
