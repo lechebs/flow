@@ -119,6 +119,18 @@ __device__ __forceinline__ _ftype128 operator-(_ftype128 &a)
 #endif
 }
 
+__device__ __forceinline__ _ftype128 &operator-=(_ftype128 &a,
+                                                 const _ftype128 &b)
+{
+    a.x -= b.x;
+    a.y -= b.y;
+#ifdef FLOAT
+    a.z -= b.z;
+    a.w -= b.w;
+#endif
+    return a;
+}
+
 #else
 
 #ifdef FLOAT

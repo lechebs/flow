@@ -495,12 +495,25 @@ struct WarpTile
     __device__ __forceinline__ WarpTile() {}
 
     __device__ __forceinline__
-    void load_transpose(const _ftype128 *__restrict__ src, uint32_t stride);
+    void load(const _ftype128 *__restrict__ src, uint32_t stride);
 
     __device__ __forceinline__
-    void store_transpose_add(_ftype128 *__restrict__ dst, uint32_t stride);
+    void store_add(_ftype128 *__restrict__ dst, uint32_t stride);
 
     __device__ __forceinline__ void transpose();
+
+    __device__ __forceinline__ void zero()
+    {
+        #pragma unroll
+        for (int k = 0; k < 8; ++k) {
+            frag[k].x = 0;
+            frag[k].y = 0;
+#ifdef FLOAT
+            frag[k].z = 0;
+            frag[k].w = 0;
+#endif
+        }
+    }
 
     template<int comp>
     __device__ __forceinline__ ftype &col(int idx)
@@ -524,6 +537,11 @@ struct WarpTile
 #endif
     }
 
+    __device__ __forceinline__ _ftype128 &cols(int idx)
+    {
+        return frag[idx];
+    }
+
 private:
     _ftype128 frag[8];
 };
@@ -531,8 +549,8 @@ private:
 // Specialize WarpTile for shmem or regs storage
 
 __device__ __forceinline__
-void WarpTile::load_transpose(const _ftype128 *__restrict__ src,
-                              uint32_t stride)
+void WarpTile::load(const _ftype128 *__restrict__ src,
+                    uint32_t stride)
 {
     const int lane_idx = threadIdx.x % WARP_SIZE;
 
@@ -544,20 +562,16 @@ void WarpTile::load_transpose(const _ftype128 *__restrict__ src,
         frag[i] = *t_src;
         t_src += stride / VEC_LENGTH;
     }
-
-    transpose();
 }
 
 __device__ __forceinline__
-void WarpTile::store_transpose_add(_ftype128 *__restrict__ dst,
-                                   uint32_t stride)
+void WarpTile::store_add(_ftype128 *__restrict__ dst,
+                         uint32_t stride)
 {
     const int lane_idx = threadIdx.x % WARP_SIZE;
 
     _ftype128 *__restrict__ t_dst =
         dst + (lane_idx / 8) * 8 * stride / VEC_LENGTH + (lane_idx % 8);
-
-    transpose();
 
     #pragma unroll
     for (int i = 0; i < 8; ++i) {
@@ -624,15 +638,143 @@ __device__ __forceinline__ void WarpTile::transpose()
     }
 }
 
-__device__ __forceinline__ void compute_Dxx_rhs_tile(WarpTile &f_x,
-                                                     WarpTile &f_y,
-                                                     WarpTile &f_z)
+__device__ __forceinline__
+void compute_pp_grad(const _ftype128 *__restrict__ p,
+                     const _ftype128 *__restrict__ phi,
+                     uint32_t height,
+                     uint32_t width,
+                     bool is_last_face,
+                     bool is_last_row,
+                     bool is_last_col,
+                     WarpTile &pp_x, // transposed on return
+                     WarpTile &pp_y,
+                     WarpTile &pp_z)
+{
+    // Load p tile once, aim for reuse
+    pp_x.load(p, width);
+    // Something like load_add could be useful, currently
+    // create another WarpTile hoping that the compiler
+    // will fuse the loops
+    WarpTile phi_t;
+    phi_t.load(phi, width);
+
+    // Compute pressure predictor
+    #pragma unroll
+    for (int k = 0; k < 8; ++k) {
+        pp_x.cols(k) += phi_t.cols(k);
+    }
+
+    if (is_last_face) {
+        pp_z.zero();
+    } else {
+        // Load next tile in the z direction
+        pp_z.load(p + height * width, width);
+        phi_t.load(phi + height * width, width);
+        // Compute pressure predictor
+        #pragma unroll
+        for (int k = 0; k < 8; ++k) {
+            pp_z.cols(k) += phi_t.cols(k);
+        }
+        // Compute dp/dz
+        #pragma unroll
+        for (int k = 0; k < 8; ++k) {
+            pp_z.cols(k) -= pp_x.cols(k);
+        }
+    }
+
+    // Compute dp/dy
+    #pragma unroll
+    for (int k = 0; k < 7; ++k) {
+        pp_y.cols(k) = pp_x.cols(k + 1) - pp_x.cols(k);
+    }
+    if (is_last_row) {
+        pp_y.col<0>(7) = 0;
+        pp_y.col<1>(7) = 0;
+#ifdef FLOAT
+        pp_y.col<2>(7) = 0;
+        pp_y.col<3>(7) = 0;
+#endif
+    } else {
+        const int lane_idx = threadIdx.x % 8;
+        // TODO: only last quarter warp must strictly
+        // fetch from gmem, use shuffles for previous threads
+        pp_y.cols(7) = *(p + width / VEC_LENGTH * 8 + lane_idx) +
+                       *(phi + width / VEC_LENGTH * 8 + lane_idx) -
+                       pp_x.cols(7);
+    }
+
+    pp_x.transpose();
+
+    // Compute dp/dx
+    #pragma unroll
+    for (int k = 0; k < 8; ++k) {
+        pp_x.col<0>(k) = pp_x.col<1>(k) - pp_x.col<0>(k);
+#ifdef FLOAT
+        pp_x.col<1>(k) = pp_x.col<2>(k) - pp_x.col<1>(k);
+        pp_x.col<2>(k) = pp_x.col<3>(k) - pp_x.col<2>(k);
+#endif
+
+        if (k < 7) { // should be folded, right?
+#ifdef FLOAT
+            pp_x.col<3>(k) = pp_x.col<0>(k + 1) - pp_x.col<2>(k);
+#else
+            pp_x.col<1>(k) = pp_x.col<0>(k + 1) - pp_x.col<1>(k);
+#endif
+        } else {
+            if (is_last_col) {
+#ifdef FLOAT
+                pp_x.col<3>(7) = 0;
+#else
+                pp_x.col<1>(7) = 0;
+#endif
+            } else {
+                const int lane_idx = threadIdx.x % 8;
+                // p points to the beginning of the subtile
+                // corresponding to the quarter warp
+                ftype pp_next = *reinterpret_cast<const ftype *>(
+                    p + width / VEC_LENGTH * lane_idx + 8) +
+                    *reinterpret_cast<const ftype *>(
+                        phi + width / VEC_LENGTH * lane_idx + 8);
+#ifdef FLOAT
+                pp_x.col<3>(7) = pp_next - pp_x.col<3>(7);
+#else
+                pp_x.col<1>(7) = pp_next - pp_x.col<1>(7);
+#endif
+            }
+        }
+    }
+
+    // WARNING: p_x is already transposed
+}
+
+__device__ __forceinline__ void compute_Dxx_Dyy_Dzz(WarpTile &dst)
+{
+
+}
+
+__device__ __forceinline__
+void compute_Dxx_rhs_tile(const _ftype128 *__restrict__ p,
+                          const _ftype128 *__restrict__ phi,
+                          uint32_t height,
+                          uint32_t width,
+                          bool is_last_face,
+                          bool is_last_row,
+                          bool is_last_col, // could be template param
+                          WarpTile &f_x,
+                          WarpTile &f_y,
+                          WarpTile &f_z)
 {
     // Keep the same tile partitioning used for transposition
 
-    // TODO: Compute it!
+    compute_pp_grad(p, phi, height, width,
+                    is_last_face, is_last_row,
+                    is_last_col, f_x, f_y, f_z);
 
-    f_x.transpose();
+    //compute_Dxx_Dyy_Dzz(f_x);
+    //compute_Dxx_Dyy_Dzz(f_y);
+    //compute_Dxx_Dyy_Dzz(f_z);
+
+    //f_x.transpose();
     f_y.transpose();
     f_z.transpose();
 }
@@ -763,6 +905,8 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
     const uint64_t num_points = depth * height * width;
 
     const _ftype128 *__restrict__ p_w = P_128(params.w);
+    const _ftype128 *__restrict__ p_p = P_128(params.p);
+    const _ftype128 *__restrict__ p_phi = P_128(params.phi);
     _ftype128 *__restrict__ p_eta_x = P_128(params.eta_x);
     _ftype128 *__restrict__ p_eta_y = P_128(params.eta_y);
     _ftype128 *__restrict__ p_eta_z = P_128(params.eta_z);
@@ -780,7 +924,7 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
     for (uint32_t z = blockIdx.x; z < depth; z += gridDim.x) {
 
         // Traverse tmp buffers front to back, map yz to xy
-        const uint64_t tmp_offset = width * z + y;
+        const uint64_t tmp_offset = height * z + y;
 
         fw_params.tmp_upp = tmp + tmp_offset;
         fw_params.tmp_f_x = tmp_f_x + tmp_offset;
@@ -790,10 +934,19 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
         const uint64_t warp_tile_offset =
             (height * width * z + width * (y & ~31)) / VEC_LENGTH;
 
+        const bool is_last_face = z == depth - 1;
+        const bool is_last_row = y > height - WARP_SIZE;
         // Loop peeling on first tile of the row to apply BCs
 
-        fw_params.w_t.load_transpose(p_w + warp_tile_offset, width);
-        compute_Dxx_rhs_tile(fw_params.f_x_t,
+        fw_params.w_t.load(p_w + warp_tile_offset, width);
+        fw_params.w_t.transpose();
+        compute_Dxx_rhs_tile(p_p + warp_tile_offset,
+                             p_phi + warp_tile_offset,
+                             height, width,
+                             is_last_face,
+                             is_last_row,
+                             false, // is_last_col
+                             fw_params.f_x_t,
                              fw_params.f_y_t,
                              fw_params.f_z_t);
 
@@ -832,10 +985,16 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
         for (uint32_t k = tile_width;
                       k < width - tile_width; k += tile_width) {
 
-            fw_params.w_t.load_transpose(p_w + warp_tile_offset
-                                             + k / VEC_LENGTH,
-                                         width);
-            compute_Dxx_rhs_tile(fw_params.f_x_t,
+            fw_params.w_t.load(
+                p_w + warp_tile_offset + k / VEC_LENGTH, width);
+            fw_params.w_t.transpose();
+            compute_Dxx_rhs_tile(p_p + warp_tile_offset + k / VEC_LENGTH,
+                                 p_phi + warp_tile_offset + k / VEC_LENGTH,
+                                 height, width,
+                                 is_last_face,
+                                 is_last_row,
+                                 false, // is_last_col
+                                 fw_params.f_x_t,
                                  fw_params.f_y_t,
                                  fw_params.f_z_t);
             // Consume tile
@@ -847,10 +1006,18 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
 
         // Loop peeling on last tile to apply BCs and solve last col
 
-        fw_params.w_t.load_transpose(p_w + warp_tile_offset
-                                         + (width - tile_width) / VEC_LENGTH,
-                                     width);
-        compute_Dxx_rhs_tile(fw_params.f_x_t,
+        fw_params.w_t.load(p_w + warp_tile_offset
+                               + (width - tile_width) / VEC_LENGTH, width);
+        fw_params.w_t.transpose();
+        compute_Dxx_rhs_tile(p_p + warp_tile_offset
+                                 + (width - tile_width) / VEC_LENGTH,
+                             p_phi + warp_tile_offset 
+                                   + (width - tile_width) / VEC_LENGTH,
+                             height, width,
+                             is_last_face,
+                             is_last_row,
+                             true, // is_last_col
+                             fw_params.f_x_t,
                              fw_params.f_y_t,
                              fw_params.f_z_t);
 
@@ -917,11 +1084,15 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
             bw_sub_cols(bw_params, 7 - tk);
         }
 
-        bw_params.u_x_t.store_transpose_add(
+        bw_params.u_x_t.transpose();
+        bw_params.u_y_t.transpose();
+        bw_params.u_z_t.transpose();
+
+        bw_params.u_x_t.store_add(
             p_eta_x + warp_tile_offset + width / VEC_LENGTH - 8, width);
-        bw_params.u_y_t.store_transpose_add(
+        bw_params.u_y_t.store_add(
             p_eta_y + warp_tile_offset + width / VEC_LENGTH - 8, width);
-        bw_params.u_z_t.store_transpose_add(
+        bw_params.u_z_t.store_add(
             p_eta_z + warp_tile_offset + width / VEC_LENGTH - 8, width);
 
         for (uint32_t k = tile_width;
@@ -935,9 +1106,13 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
             const uint64_t tile_offset =
                 warp_tile_offset + (width - k - tile_width) / VEC_LENGTH;
 
-            bw_params.u_x_t.store_transpose_add(p_eta_x + tile_offset, width);
-            bw_params.u_y_t.store_transpose_add(p_eta_y + tile_offset, width);
-            bw_params.u_z_t.store_transpose_add(p_eta_z + tile_offset, width);
+            bw_params.u_x_t.transpose();
+            bw_params.u_y_t.transpose();
+            bw_params.u_z_t.transpose();
+
+            bw_params.u_x_t.store_add(p_eta_x + tile_offset, width);
+            bw_params.u_y_t.store_add(p_eta_y + tile_offset, width);
+            bw_params.u_z_t.store_add(p_eta_z + tile_offset, width);
         }
     }
 }
