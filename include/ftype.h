@@ -98,6 +98,12 @@ __device__ __forceinline__ _ftype128 operator*(const _ftype128 &a,
     return b * a;
 }
 
+__device__ __forceinline__ _ftype128 operator/(const _ftype128 &a,
+                                               const ftype &b)
+{
+    return b / a;
+}
+
 __device__ __forceinline__ _ftype128 &operator+=(_ftype128 &a,
                                                  const _ftype128 &b)
 {

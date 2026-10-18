@@ -6,6 +6,8 @@
 // TODO: Move to separate header
 __constant__ ftype _D_DX;
 __constant__ ftype _D_DT;
+__constant__ ftype _D_NU;
+__constant__ ftype _D_DX_RCP;
 
 // Dirichlet boundary conditions for velocity
 template<typename FuncX, typename FuncY, typename FuncZ>
@@ -84,11 +86,11 @@ struct BoundaryConditions
         ftype3 u;
 
         u.x = u_x(
-            x * _D_DX + _D_DX / 2, y * _D_DX + _D_DX / 2, z * _D_DX, t * _D_DT);
+            x * _D_DX + _D_DX / 2, y * _D_DX, z * _D_DX, t * _D_DT);
         u.y = u_y(
-            x * _D_DX, y * _D_DX + _D_DX / 2, z * _D_DX, t * _D_DT);
+            x * _D_DX + _D_DX / 2, y * _D_DX + _D_DX / 2, z * _D_DX, t * _D_DT);
         u.z = u_z(
-            x * _D_DX, y * _D_DX + _D_DX / 2, z * _D_DX + _D_DX / 2, t * _D_DT);
+            x * _D_DX + _D_DX / 2, y * _D_DX, z * _D_DX + _D_DX / 2, t * _D_DT);
 
         return u;
     }
@@ -163,7 +165,7 @@ struct ManUx
     __device__ __forceinline__
     ftype operator()(ftype x, ftype y, ftype z, ftype t) const
     {
-        return sin(x) * cos(y + t) * sin(z);
+        return 1;//sin(x) * cos(y + t) * sin(z);
     }
 };
 
@@ -174,7 +176,7 @@ struct ManUy
     __device__ __forceinline__
     ftype operator()(ftype x, ftype y, ftype z, ftype t) const
     {
-        return cos(x) * sin(y + t) * sin(z);
+        return 1;//cos(x) * sin(y + t) * sin(z);
     }
 };
 
@@ -185,7 +187,7 @@ struct ManUz
     __device__ __forceinline__
     ftype operator()(ftype x, ftype y, ftype z, ftype t) const
     {
-        return 2 * cos(x) * cos(y + t) * cos(z);
+        return 1;//2 * cos(x) * cos(y + t) * cos(z);
     }
 };
 
