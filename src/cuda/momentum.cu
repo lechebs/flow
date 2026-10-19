@@ -957,19 +957,49 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
     }
 }
 
+struct ftype128_vec
+{
+    __device__ __forceinline__ ftype128_vec(const ftype128_vec &v)
+        : x(v.x), y(v.y), z(v.z) {}
+
+    __device__ __forceinline__ ftype128_vec(const _ftype128 *x_,
+                                            const _ftype128 *y_,
+                                            const _ftype128 *z_)
+        : x(x_), y(y_), z(z_) {}
+
+    __device__ __forceinline__ ftype128_vec(const ftype *x_,
+                                            const ftype *y_,
+                                            const ftype *z_)
+        : x(reinterpret_cast<const _ftype128 *>(x_)),
+          y(reinterpret_cast<const _ftype128 *>(y_)),
+          z(reinterpret_cast<const _ftype128 *>(z_)) {}
+
+    __device__ __forceinline__ ftype128_vec operator+(uint64_t offset) const
+    {
+        return ftype128_vec(x + offset, y + offset, z + offset);
+    }
+
+    __device__ __forceinline__
+    _ftype128 *x_cc() { return const_cast<_ftype128 *>(x); }
+
+    __device__ __forceinline__
+    _ftype128 *y_cc() { return const_cast<_ftype128 *>(y); }
+
+    __device__ __forceinline__
+    _ftype128 *z_cc() { return const_cast<_ftype128 *>(z); }
+
+    const _ftype128 *__restrict__ x;
+    const _ftype128 *__restrict__ y;
+    const _ftype128 *__restrict__ z;
+};
+
 template<typename BoundaryConditions>
 __device__ __forceinline__
 void compute_Dxx_rhs_tile(const _ftype128 *__restrict__ p,
                           const _ftype128 *__restrict__ phi,
-                          const _ftype128 *__restrict__ eta_x,
-                          const _ftype128 *__restrict__ eta_y,
-                          const _ftype128 *__restrict__ eta_z,
-                          const _ftype128 *__restrict__ zeta_x,
-                          const _ftype128 *__restrict__ zeta_y,
-                          const _ftype128 *__restrict__ zeta_z,
-                          const _ftype128 *__restrict__ vel_x,
-                          const _ftype128 *__restrict__ vel_y,
-                          const _ftype128 *__restrict__ vel_z,
+                          const ftype128_vec eta,
+                          const ftype128_vec zeta,
+                          const ftype128_vec vel,
                           const BoundaryConditions &bc,
                           uint32_t depth,
                           uint32_t height,
@@ -983,7 +1013,14 @@ void compute_Dxx_rhs_tile(const _ftype128 *__restrict__ p,
                           WarpTile &f_y,
                           WarpTile &f_z)
 {
-    // Keep the same tile partitioning used for transposition
+    // WARNING: Make sure this is fixed
+    constexpr int num_threads = 64;
+
+    __shared__ _ftype128 eta_x_next[num_threads * 8];
+    __shared__ _ftype128 zeta_x_next[num_threads * 8];
+    __shared__ _ftype128 vel_x_next[num_threads * 8];
+
+    // -> 6KB of shmem per thread block
 
     compute_pp_grad(p, phi, height, width,
                     ti == depth - 1,
@@ -992,14 +1029,30 @@ void compute_Dxx_rhs_tile(const _ftype128 *__restrict__ p,
                     f_x, f_y, f_z);
 
     compute_Dxx_Dyy_Dzz<BoundaryConditions, COMP_X>(
-        eta_x, zeta_x, vel_x, bc, depth, height, width,
+        eta.x, zeta.x, vel.x, bc, depth, height, width,
         tk, tj, ti, timestep, f_x);
     compute_Dxx_Dyy_Dzz<BoundaryConditions, COMP_Y>(
-        eta_y, zeta_y, vel_y, bc, depth, height, width,
+        eta.y, zeta.y, vel.y, bc, depth, height, width,
         tk, tj, ti, timestep, f_y);
      compute_Dxx_Dyy_Dzz<BoundaryConditions, COMP_Z>(
-        eta_z, zeta_z, vel_z, bc, depth, height, width,
+        eta.z, zeta.z, vel.z, bc, depth, height, width,
         tk, tj, ti, timestep, f_z);
+
+    // Prefetch into eta_x_next, zeta_x_next, vel_x_next
+    // I can use __pipeline_prefetch on sm_80+
+
+    // I need previous eta_x_prev, zeta_x_prev, vel_x_prev
+    // that should live across tile loops, so they have to
+    // be defined outside of this function. They are simple
+    // ftype values, since each thread needs one of them
+
+
+#if __CUDA_ARCH__ >= 800
+
+#else
+
+#endif
+
 
     f_x.transpose();
     f_y.transpose();
@@ -1132,15 +1185,10 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
     const _ftype128 *__restrict__ p_w = P_128(params.w);
     const _ftype128 *__restrict__ p_p = P_128(params.p);
     const _ftype128 *__restrict__ p_phi = P_128(params.phi);
-    _ftype128 *__restrict__ p_eta_x = P_128(params.eta_x);
-    _ftype128 *__restrict__ p_eta_y = P_128(params.eta_y);
-    _ftype128 *__restrict__ p_eta_z = P_128(params.eta_z);
-    const _ftype128 *__restrict__ p_zeta_x = P_128(params.zeta_x);
-    const _ftype128 *__restrict__ p_zeta_y = P_128(params.zeta_y);
-    const _ftype128 *__restrict__ p_zeta_z = P_128(params.zeta_z);
-    const _ftype128 *__restrict__ p_vel_x = P_128(params.u_x);
-    const _ftype128 *__restrict__ p_vel_y = P_128(params.u_y);
-    const _ftype128 *__restrict__ p_vel_z = P_128(params.u_z);
+
+    ftype128_vec p_eta(params.eta_x, params.eta_y, params.eta_z);
+    const ftype128_vec p_zeta(params.zeta_x, params.zeta_y, params.zeta_z);
+    const ftype128_vec p_vel(params.u_x, params.u_y, params.u_z);
 
     ftype *__restrict__ tmp = params.tmp;
     ftype *__restrict__ tmp_f_x = params.tmp + num_points;
@@ -1171,15 +1219,9 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
         fw_params.w_t.transpose();
         compute_Dxx_rhs_tile(p_p + warp_tile_offset,
                              p_phi + warp_tile_offset,
-                             p_eta_x + warp_tile_offset,
-                             p_eta_y + warp_tile_offset,
-                             p_eta_z + warp_tile_offset,
-                             p_zeta_x + warp_tile_offset,
-                             p_zeta_y + warp_tile_offset,
-                             p_zeta_z + warp_tile_offset,
-                             p_vel_x + warp_tile_offset,
-                             p_vel_y + warp_tile_offset,
-                             p_vel_z + warp_tile_offset,
+                             p_eta + warp_tile_offset,
+                             p_zeta + warp_tile_offset,
+                             p_vel + warp_tile_offset,
                              bc,
                              depth, height, width,
                              0, y & ~31, z,
@@ -1228,15 +1270,9 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
             fw_params.w_t.transpose();
             compute_Dxx_rhs_tile(p_p + warp_tile_offset + k / VEC_LENGTH,
                                  p_phi + warp_tile_offset + k / VEC_LENGTH,
-                                 p_eta_x + warp_tile_offset + k / VEC_LENGTH,
-                                 p_eta_y + warp_tile_offset + k / VEC_LENGTH,
-                                 p_eta_z + warp_tile_offset + k / VEC_LENGTH,
-                                 p_zeta_x + warp_tile_offset + k / VEC_LENGTH,
-                                 p_zeta_y + warp_tile_offset + k / VEC_LENGTH,
-                                 p_zeta_z + warp_tile_offset + k / VEC_LENGTH,
-                                 p_vel_x + warp_tile_offset + k / VEC_LENGTH,
-                                 p_vel_y + warp_tile_offset + k / VEC_LENGTH,
-                                 p_vel_z + warp_tile_offset + k / VEC_LENGTH,
+                                 p_eta + warp_tile_offset + k / VEC_LENGTH,
+                                 p_zeta + warp_tile_offset + k / VEC_LENGTH,
+                                 p_vel + warp_tile_offset + k / VEC_LENGTH,
                                  bc,
                                  depth, height, width,
                                  k, y & ~31, z,
@@ -1253,31 +1289,16 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
 
         // Loop peeling on last tile to apply BCs and solve last col
 
-        fw_params.w_t.load(p_w + warp_tile_offset
-                               + (width - tile_width) / VEC_LENGTH, width);
+        const uint64_t tile_offset =
+            warp_tile_offset + (width - tile_width) / VEC_LENGTH;
+
+        fw_params.w_t.load(p_w + tile_offset, width);
         fw_params.w_t.transpose();
-        compute_Dxx_rhs_tile(p_p + warp_tile_offset
-                                 + (width - tile_width) / VEC_LENGTH,
-                             p_phi + warp_tile_offset
-                                   + (width - tile_width) / VEC_LENGTH,
-                             p_eta_x + warp_tile_offset
-                                     + (width - tile_width) / VEC_LENGTH,
-                             p_eta_y + warp_tile_offset
-                                     + (width - tile_width) / VEC_LENGTH,
-                             p_eta_z + warp_tile_offset
-                                     + (width - tile_width) / VEC_LENGTH,
-                             p_zeta_x + warp_tile_offset
-                                      + (width - tile_width) / VEC_LENGTH,
-                             p_zeta_y + warp_tile_offset
-                                      + (width - tile_width) / VEC_LENGTH,
-                             p_zeta_z + warp_tile_offset
-                                      + (width - tile_width) / VEC_LENGTH,
-                             p_vel_x + warp_tile_offset
-                                     + (width - tile_width) / VEC_LENGTH,
-                             p_vel_y + warp_tile_offset
-                                     + (width - tile_width) / VEC_LENGTH,
-                             p_vel_z + warp_tile_offset
-                                     + (width - tile_width) / VEC_LENGTH,
+        compute_Dxx_rhs_tile(p_p + tile_offset,
+                             p_phi + tile_offset,
+                             p_eta + tile_offset,
+                             p_zeta + tile_offset,
+                             p_vel + tile_offset,
                              bc,
                              depth, height, width,
                              width - tile_width, y & ~31, z,
@@ -1353,12 +1374,12 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
         bw_params.u_y_t.transpose();
         bw_params.u_z_t.transpose();
 
-        bw_params.u_x_t.store_add(
-            p_eta_x + warp_tile_offset + width / VEC_LENGTH - 8, width);
-        bw_params.u_y_t.store_add(
-            p_eta_y + warp_tile_offset + width / VEC_LENGTH - 8, width);
-        bw_params.u_z_t.store_add(
-            p_eta_z + warp_tile_offset + width / VEC_LENGTH - 8, width);
+        const uint64_t dst_offset =
+            warp_tile_offset + width / VEC_LENGTH - 8;
+
+        bw_params.u_x_t.store_add(p_eta.x_cc() + dst_offset, width);
+        bw_params.u_y_t.store_add(p_eta.y_cc() + dst_offset, width);
+        bw_params.u_z_t.store_add(p_eta.z_cc() + dst_offset, width);
 
         for (uint32_t k = tile_width;
                       k < width; k += tile_width) {
@@ -1375,9 +1396,9 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
             bw_params.u_y_t.transpose();
             bw_params.u_z_t.transpose();
 
-            bw_params.u_x_t.store_add(p_eta_x + tile_offset, width);
-            bw_params.u_y_t.store_add(p_eta_y + tile_offset, width);
-            bw_params.u_z_t.store_add(p_eta_z + tile_offset, width);
+            bw_params.u_x_t.store_add(p_eta.x_cc() + tile_offset, width);
+            bw_params.u_y_t.store_add(p_eta.y_cc() + tile_offset, width);
+            bw_params.u_z_t.store_add(p_eta.z_cc() + tile_offset, width);
         }
     }
 }
