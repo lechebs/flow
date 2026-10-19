@@ -5,6 +5,7 @@
 
 /* cuda/ includes */
 #include "utils.h"
+#include "forcing.h"
 #include "boundary.h"
 #include "momentum.h"
 
@@ -684,14 +685,14 @@ void compute_pp_grad(const _ftype128 *__restrict__ p,
         // Compute dp/dz
         #pragma unroll
         for (int k = 0; k < 8; ++k) {
-            pp_z.cols(k) = (pp_z.cols(k) - pp_x.cols(k)) * _D_DX;
+            pp_z.cols(k) = (pp_z.cols(k) - pp_x.cols(k)) * _D_DX_RCP;
         }
     }
 
     // Compute dp/dy
     #pragma unroll
     for (int k = 0; k < 7; ++k) {
-        pp_y.cols(k) = (pp_x.cols(k + 1) - pp_x.cols(k)) * _D_DX;
+        pp_y.cols(k) = (pp_x.cols(k + 1) - pp_x.cols(k)) * _D_DX_RCP;
     }
     if (is_last_row) {
         pp_y.col<0>(7) = 0;
@@ -704,9 +705,10 @@ void compute_pp_grad(const _ftype128 *__restrict__ p,
         const int lane_idx = threadIdx.x % 8;
         // TODO: only last quarter warp must strictly
         // fetch from gmem, use shuffles for previous threads
-        pp_y.cols(7) = (*(p + width / VEC_LENGTH * 8 + lane_idx) +
-                        *(phi + width / VEC_LENGTH * 8 + lane_idx) -
-                        pp_x.cols(7)) * _D_DX_RCP;
+        pp_y.cols(7) =
+            (*(p + width / VEC_LENGTH * 8 * (lane_idx / 8) + lane_idx) +
+             *(phi + width / VEC_LENGTH * 8 * (lane_idx / 8) + lane_idx) -
+            pp_x.cols(7)) * _D_DX_RCP;
     }
 
     pp_x.transpose();
@@ -737,8 +739,8 @@ void compute_pp_grad(const _ftype128 *__restrict__ p,
 #endif
             } else {
                 const int lane_idx = threadIdx.x % 8;
-                // p points to the beginning of the subtile
-                // corresponding to the quarter warp
+
+                // WARNING: gather across 32 rows :/
                 ftype pp_next = *reinterpret_cast<const ftype *>(
                     p + width / VEC_LENGTH * lane_idx + 8) +
                     *reinterpret_cast<const ftype *>(
@@ -773,6 +775,7 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
                          uint32_t tj,
                          uint32_t ti,
                          uint32_t timestep,
+                         ftype &eta_prev,
                          WarpTile &dst)
 {
     const int lane_idx = threadIdx.x % WARP_SIZE;
@@ -807,15 +810,11 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
         #pragma unroll
         for (int j = 0; j < 8; ++j) {
 
-            // NOTE: I need back bcs here! Sweep specific bcs
-            // are not enough. The Dxx sweep has to receive
-            // the generic unwrapped BoundaryCondition struct
-
             dd.cols(j) = (ftype) 4.0 / 3 * v.cols(j) - 4 * dd.cols(j);
 
             ftype bc_vals[VEC_LENGTH];
             #pragma unroll
-    for (int c = 0; c < VEC_LENGTH; ++c) {
+            for (int c = 0; c < VEC_LENGTH; ++c) {
                 ftype3 val =
                     bc.get_u_delta_back(tk + (lane_idx % 8) * VEC_LENGTH + c,
                                         tj + (lane_idx / 8) * 8 + j,
@@ -856,19 +855,19 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
     WarpTile z;
     z.load(zeta, width);
 
-    if (!is_first_row) {
+    if (!is_first_row || lane_idx >= 8) {
         // TODO: only first subwarp has to fetch from gmem,
-        // others can use shuffles at the cost of divergence
-
-        // zeta points to quarter warp subtile
-        dd.cols(0) += *(zeta + (lane_idx % 8)) - 2 * z.cols(0) + z.cols(1);
+        // others can use shuffles
+        dd.cols(0) +=
+            *(zeta + width / VEC_LENGTH * 8 * (lane_idx / 8)
+                   - width / VEC_LENGTH + (lane_idx % 8)) -
+            2 * z.cols(0) + z.cols(1);
     }
 
     #pragma unroll
     for (int j = 1; j < 7; ++j) {
         dd.cols(j) += z.cols(j - 1) - 2 * z.cols(j) + z.cols(j + 1);
     }
-
 
     if (is_last_row && comp != COMP_Y && lane_idx > 23) { // divergence :/
 
@@ -897,8 +896,11 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
 #endif
 
     } else if (!is_last_row || lane_idx < 24) {
+        // TODO: only last subwarp has to fetch from gmem,
+        // others can use shuffles
         dd.cols(7) += z.cols(6) - 2 * z.cols(7) +
-                      *(zeta + 7 * width / VEC_LENGTH + (lane_idx % 8));
+                      *(zeta + width / VEC_LENGTH * (8 * (lane_idx / 8) + 1)
+                        + (lane_idx % 8));
     }
 
     const bool is_first_col = tk == 0;
@@ -916,22 +918,39 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
     // with register tiles here, so let's avoid it.
     WarpTile ddx;
 
-    // TODO: handle k = 0
-    // Gathering the last column of the previous tile and the
-    // first column of the next tile is absurdly inefficient.
-    // What if we prefetch the next tile into shared memory?
-    // We would also need to keep around the last column
-    // of the previous tile..
+    const ftype left_col = is_first_col ? 0 : eta_prev;
+
+    ftype right_col = 0;
+    if (is_last_col) {
+        ftype3 u = bc.get_u_delta_right(
+            width - 1, tj + lane_idx, ti, timestep - 1);
+
+        if constexpr (comp == COMP_Y) {
+            right_col = u.y;
+        } else { // comp == COMP_Z
+            right_col = u.z;
+        }
+
+    } else if (comp != COMP_X) {
+        // WARNING: gather across 32 rows :/
+        right_col = (eta + lane_idx * (width / VEC_LENGTH) + 8)->x;
+    }
+
+    // k = 0
+    ddx.col<0>(0) = left_col - 2 * e.col<0>(0) + e.col<1>(0);
+#ifdef FLOAT
+    ddx.col<1>(0) = e.col<0>(0) - 2 * e.col<1>(0) + e.col<2>(0);
+    ddx.col<2>(0) = e.col<1>(0) - 2 * e.col<2>(0) + e.col<3>(0);
+#endif
+    ddx.col<VEC_LENGTH - 1>(0) = e.col<VEC_LENGTH - 2>(0) -
+                                 2 * e.col<VEC_LENGTH - 1>(0) +
+                                 e.col<0>(1);
 
     #pragma unroll
     for (int k = 1; k < 7; ++k) {
 
-        ddx.col<0>(k) = -2 * e.col<0>(k) + e.col<1>(k);
-#ifdef FLOAT
-        ddx.col<0>(k) += e.col<3>(k - 1);
-#else
-        ddx.col<0>(k) += e.col<1>(k - 1);
-#endif
+        ddx.col<0>(k) =
+            e.col<VEC_LENGTH - 1>(k - 1) - 2 * e.col<0>(k) + e.col<1>(k);
 
         ddx.col<1>(k) = e.col<0>(k) + -2 * e.col<1>(k);
 #ifdef FLOAT
@@ -946,7 +965,28 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
 #endif
     }
 
-    // TODO: handle k = 7
+    // k = 7
+
+    ddx.col<0>(7) = e.col<VEC_LENGTH - 1>(6) - 2 * e.col<0>(7) + e.col<1>(7);
+#ifdef FLOAT
+    ddx.col<1>(7) = e.col<0>(7) - 2 * e.col<1>(7) + e.col<2>(7);
+    ddx.col<2>(7) = e.col<1>(7) - 2 * e.col<2>(7) + e.col<3>(7);
+#endif
+
+    if (is_last_col && comp != COMP_X) {
+        ddx.col<VEC_LENGTH - 1>(7) =
+            (ftype) (4.0 / 3) * e.col<VEC_LENGTH - 2>(7) -
+            4 * e.col<VEC_LENGTH - 2>(7) +
+            (ftype) (8.0 / 3) * right_col;
+
+    } else if (is_last_col) { // comp == COMP_X
+        ddx.col<VEC_LENGTH - 1>(7) = 0; // f_x at the last column is not used
+    } else {
+    ddx.col<VEC_LENGTH - 1>(7) =
+            e.col<VEC_LENGTH - 2>(7) - 2 * e.col<VEC_LENGTH - 1>(7) + right_col;
+    }
+
+    eta_prev = e.col<VEC_LENGTH - 1>(7);
 
     ddx.transpose();
 
@@ -993,14 +1033,16 @@ struct ftype128_vec
     const _ftype128 *__restrict__ z;
 };
 
-template<typename BoundaryConditions>
+template<typename BoundaryConditions, typename ForcingTerm>
 __device__ __forceinline__
-void compute_Dxx_rhs_tile(const _ftype128 *__restrict__ p,
+void compute_Dxx_rhs_tile(const _ftype128 *__restrict__ k,
+                          const _ftype128 *__restrict__ p,
                           const _ftype128 *__restrict__ phi,
                           const ftype128_vec eta,
                           const ftype128_vec zeta,
                           const ftype128_vec vel,
                           const BoundaryConditions &bc,
+                          ForcingTerm f,
                           uint32_t depth,
                           uint32_t height,
                           uint32_t width,
@@ -1009,54 +1051,82 @@ void compute_Dxx_rhs_tile(const _ftype128 *__restrict__ p,
                           uint32_t tj,
                           uint32_t ti,
                           uint32_t timestep,
-                          WarpTile &f_x,
-                          WarpTile &f_y,
-                          WarpTile &f_z)
+                          ftype3 &eta_prev_last,
+                          WarpTile &rhs_x,
+                          WarpTile &rhs_y,
+                          WarpTile &rhs_z)
 {
-    // WARNING: Make sure this is fixed
-    constexpr int num_threads = 64;
-
-    __shared__ _ftype128 eta_x_next[num_threads * 8];
-    __shared__ _ftype128 zeta_x_next[num_threads * 8];
-    __shared__ _ftype128 vel_x_next[num_threads * 8];
-
-    // -> 6KB of shmem per thread block
-
     compute_pp_grad(p, phi, height, width,
                     ti == depth - 1,
                     tj == height - WARP_SIZE,
                     tk == width - 8 * VEC_LENGTH,
-                    f_x, f_y, f_z);
+                    rhs_x, rhs_y, rhs_z);
 
     compute_Dxx_Dyy_Dzz<BoundaryConditions, COMP_X>(
         eta.x, zeta.x, vel.x, bc, depth, height, width,
-        tk, tj, ti, timestep, f_x);
+        tk, tj, ti, timestep, eta_prev_last.x, rhs_x);
     compute_Dxx_Dyy_Dzz<BoundaryConditions, COMP_Y>(
         eta.y, zeta.y, vel.y, bc, depth, height, width,
-        tk, tj, ti, timestep, f_y);
+        tk, tj, ti, timestep, eta_prev_last.y, rhs_y);
      compute_Dxx_Dyy_Dzz<BoundaryConditions, COMP_Z>(
         eta.z, zeta.z, vel.z, bc, depth, height, width,
-        tk, tj, ti, timestep, f_z);
+        tk, tj, ti, timestep, eta_prev_last.z, rhs_z);
 
-    // Prefetch into eta_x_next, zeta_x_next, vel_x_next
-    // I can use __pipeline_prefetch on sm_80+
+    const int lane_idx = threadIdx.x % WARP_SIZE;
 
-    // I need previous eta_x_prev, zeta_x_prev, vel_x_prev
-    // that should live across tile loops, so they have to
-    // be defined outside of this function. They are simple
-    // ftype values, since each thread needs one of them
+    // I'm avoiding explicit WarpTiles here
 
+    #pragma unroll
+    for (int j = 0; j < 8; ++j) {
 
-#if __CUDA_ARCH__ >= 800
+        const uint64_t off =
+            width / VEC_LENGTH * (lane_idx / 8) * 8 + (lane_idx % 8);
 
-#else
+        _ftype128 k_ = k[off];
 
+        _ftype128 dt_over_beta =
+            _D_DT / ((ftype) 1 + _D_DT * _D_NU / (2 * k_));
+
+        _ftype128 coeff =
+            (ftype) 1 - 2 * _D_DT * _D_NU / (2 * k_ + _D_DT + _D_NU);
+
+        const uint32_t x = tk + VEC_LENGTH * (lane_idx % 8);
+        const uint32_t y = tj + (lane_idx / 8) * 8 + j;
+        const uint32_t z = ti;
+
+        _ftype128 f_x, f_y, f_z;
+
+        f_x.x = f.x(x + 0, y, z, timestep);
+        f_y.x = f.y(x + 0, y, z, timestep);
+        f_z.x = f.z(x + 0, y, z, timestep);
+        f_x.y = f.x(x + 1, y, z, timestep);
+        f_y.y = f.y(x + 1, y, z, timestep);
+        f_z.y = f.z(x + 1, y, z, timestep);
+#ifdef FLOAT
+        f_x.z = f.x(x + 2, y, z, timestep);
+        f_y.z = f.y(x + 2, y, z, timestep);
+        f_z.z = f.z(x + 2, y, z, timestep);
+        f_x.w = f.x(x + 3, y, z, timestep);
+        f_y.w = f.y(x + 3, y, z, timestep);
+        f_z.w = f.z(x + 3, y, z, timestep);
 #endif
 
+        rhs_x.cols(j) = coeff * vel.x[off]
+                        + (rhs_x.cols(j) + f_x) * dt_over_beta
+                        - eta.x[off];
 
-    f_x.transpose();
-    f_y.transpose();
-    f_z.transpose();
+        rhs_y.cols(j) = coeff * vel.y[off] +
+                        (rhs_y.cols(j) + f_y) * dt_over_beta
+                        - eta.y[off];
+
+        rhs_z.cols(j) = coeff * vel.z[off] +
+                        (rhs_z.cols(j) + f_z) * dt_over_beta -
+                        eta.z[off];
+    }
+
+    rhs_x.transpose();
+    rhs_y.transpose();
+    rhs_z.transpose();
 }
 
 struct FwReduParams
@@ -1171,7 +1241,7 @@ __device__ __forceinline__ void bw_sub_cols(BwSubParams &params, int col)
     bw_sub_col<0>(params, col);
 }
 
-template<typename BoundaryConditions>
+template<typename BoundaryConditions, typename ForcingTerm>
 __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
 {
     const uint32_t y = blockDim.x * blockIdx.y + threadIdx.x;
@@ -1182,6 +1252,7 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
 
     const uint64_t num_points = depth * height * width;
 
+    const _ftype128 *__restrict__ p_k = P_128(params.k);
     const _ftype128 *__restrict__ p_w = P_128(params.w);
     const _ftype128 *__restrict__ p_p = P_128(params.p);
     const _ftype128 *__restrict__ p_phi = P_128(params.phi);
@@ -1213,19 +1284,24 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
         const uint64_t warp_tile_offset =
             (height * width * z + width * (y & ~31)) / VEC_LENGTH;
 
+        ftype3 eta_prev = { 0, 0, 0 }; // Last col of prev eta tile
+
         // Loop peeling on first tile of the row to apply BCs
 
         fw_params.w_t.load(p_w + warp_tile_offset, width);
         fw_params.w_t.transpose();
-        compute_Dxx_rhs_tile(p_p + warp_tile_offset,
+        compute_Dxx_rhs_tile(p_k + warp_tile_offset,
+                             p_p + warp_tile_offset,
                              p_phi + warp_tile_offset,
                              p_eta + warp_tile_offset,
                              p_zeta + warp_tile_offset,
                              p_vel + warp_tile_offset,
                              bc,
+                             ForcingTerm(),
                              depth, height, width,
                              0, y & ~31, z,
                              params.timestep,
+                             eta_prev,
                              fw_params.f_x_t,
                              fw_params.f_y_t,
                              fw_params.f_z_t);
@@ -1268,15 +1344,18 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
             fw_params.w_t.load(
                 p_w + warp_tile_offset + k / VEC_LENGTH, width);
             fw_params.w_t.transpose();
-            compute_Dxx_rhs_tile(p_p + warp_tile_offset + k / VEC_LENGTH,
+            compute_Dxx_rhs_tile(p_k + warp_tile_offset + k / VEC_LENGTH,
+                                 p_p + warp_tile_offset + k / VEC_LENGTH,
                                  p_phi + warp_tile_offset + k / VEC_LENGTH,
                                  p_eta + warp_tile_offset + k / VEC_LENGTH,
                                  p_zeta + warp_tile_offset + k / VEC_LENGTH,
                                  p_vel + warp_tile_offset + k / VEC_LENGTH,
                                  bc,
+                                 ForcingTerm(),
                                  depth, height, width,
                                  k, y & ~31, z,
                                  params.timestep,
+                                 eta_prev,
                                  fw_params.f_x_t,
                                  fw_params.f_y_t,
                                  fw_params.f_z_t);
@@ -1294,15 +1373,18 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
 
         fw_params.w_t.load(p_w + tile_offset, width);
         fw_params.w_t.transpose();
-        compute_Dxx_rhs_tile(p_p + tile_offset,
+        compute_Dxx_rhs_tile(p_k + tile_offset,
+                             p_p + tile_offset,
                              p_phi + tile_offset,
                              p_eta + tile_offset,
                              p_zeta + tile_offset,
                              p_vel + tile_offset,
                              bc,
+                             ForcingTerm(),
                              depth, height, width,
                              width - tile_width, y & ~31, z,
                              params.timestep,
+                             eta_prev,
                              fw_params.f_x_t,
                              fw_params.f_y_t,
                              fw_params.f_z_t);
@@ -1447,13 +1529,14 @@ void launch_momentum_solve_Dxx(const ftype *__restrict__ k,
     const dim3 num_blocks(depth / COARSE_FACTOR_Y, height / num_threads);
 
     using BC = BoundaryConditions<ManUx, ManUy, ManUz>;
+    using F = ForcingTerm<ManFx, ManFy, ManFz>;
 
     d_data_dxx.timestep = timestep;
 
     CUDA_TIMER_CREATE(solve_Dxx_sweep);
     CUDA_TIMER_RESTART(solve_Dxx_sweep);
     CUDA_CHECK_LAUNCH(
-        solve_sweep_Dxx<BC><<<num_blocks, num_threads>>>(d_data_dxx));
+        solve_sweep_Dxx<BC, F><<<num_blocks, num_threads>>>(d_data_dxx));
     cudaDeviceSynchronize();
     CUDA_TIMER_ELAPSED(solve_Dxx_sweep, 1);
     CUDA_TIMER_DESTROY(solve_Dxx_sweep);

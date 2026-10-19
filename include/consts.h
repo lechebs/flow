@@ -8,6 +8,13 @@ extern ftype _NU;
 extern ftype _DT;
 extern ftype _DX;
 
+#ifdef __NVCC__
+__constant__ ftype _D_DX;
+__constant__ ftype _D_DT;
+__constant__ ftype _D_NU;
+__constant__ ftype _D_DX_RCP;
+#endif
+
 #define DEFINE_NU(x) ftype _NU = x;
 #define DEFINE_DT(x) ftype _DT = x;
 #define DEFINE_DX(x) ftype _DX = x;

@@ -66,6 +66,16 @@ __device__ __forceinline__ _ftype128 operator+(const ftype &a,
 #endif
 }
 
+__device__ __forceinline__ _ftype128 operator-(const ftype &a,
+                                               const _ftype128 &b)
+{
+#ifdef FLOAT
+    return make_float4(a - b.x, a - b.y, a - b.z, a - b.w);
+#else
+    return make_double2(a - b.x, a - b.y);
+#endif
+}
+
 __device__ __forceinline__ _ftype128 operator*(const ftype &a,
                                                const _ftype128 &b)
 {
