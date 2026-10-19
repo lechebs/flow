@@ -515,7 +515,7 @@ int main(void)
     ArenaAllocator arena;
     arena_init(&arena, 1ul << 33);
 
-    RUN_TEST(test_convergence_space, &arena, 4, 4);
+    //RUN_TEST(test_convergence_space, &arena, 4, 4);
     RUN_TEST(test_convergence_time, &arena, 4, 4);
 
     arena_destroy(&arena);

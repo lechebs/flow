@@ -675,8 +675,8 @@ void compute_pp_grad(const _ftype128 *__restrict__ p,
         pp_z.zero();
     } else {
         // Load next tile in the z direction
-        pp_z.load(p + height * width, width);
-        phi_t.load(phi + height * width, width);
+        pp_z.load(p + height * width / VEC_LENGTH, width);
+        phi_t.load(phi + height * width / VEC_LENGTH, width);
         // Compute pressure predictor
         #pragma unroll
         for (int k = 0; k < 8; ++k) {
@@ -685,16 +685,21 @@ void compute_pp_grad(const _ftype128 *__restrict__ p,
         // Compute dp/dz
         #pragma unroll
         for (int k = 0; k < 8; ++k) {
-            pp_z.cols(k) = (pp_z.cols(k) - pp_x.cols(k)) * _D_DX_RCP;
+            pp_z.cols(k) = (pp_z.cols(k) - pp_x.cols(k)) * -_D_DX_RCP;
         }
     }
 
     // Compute dp/dy
     #pragma unroll
     for (int k = 0; k < 7; ++k) {
-        pp_y.cols(k) = (pp_x.cols(k + 1) - pp_x.cols(k)) * _D_DX_RCP;
+        pp_y.cols(k) = (pp_x.cols(k + 1) - pp_x.cols(k)) * -_D_DX_RCP;
     }
-    if (is_last_row) {
+
+    const int lane_idx = threadIdx.x % WARP_SIZE;
+    const int quarter = lane_idx / 8;
+    const int strip = lane_idx % 8;
+
+    if (is_last_row && quarter == 3) {
         pp_y.col<0>(7) = 0;
         pp_y.col<1>(7) = 0;
 #ifdef FLOAT
@@ -702,13 +707,12 @@ void compute_pp_grad(const _ftype128 *__restrict__ p,
         pp_y.col<3>(7) = 0;
 #endif
     } else {
-        const int lane_idx = threadIdx.x % 8;
-        // TODO: only last quarter warp must strictly
-        // fetch from gmem, use shuffles for previous threads
+        // TODO: shuffle for q < 3, gmem only for q == 3.
+        const uint64_t next_row =
+            (uint64_t) width / VEC_LENGTH * 8 * (quarter + 1) + strip;
         pp_y.cols(7) =
-            (*(p + width / VEC_LENGTH * 8 * (lane_idx / 8) + lane_idx) +
-             *(phi + width / VEC_LENGTH * 8 * (lane_idx / 8) + lane_idx) -
-            pp_x.cols(7)) * _D_DX_RCP;
+            (*(p + next_row) + *(phi + next_row) -
+             pp_x.cols(7)) * -_D_DX_RCP;
     }
 
     pp_x.transpose();
@@ -716,40 +720,30 @@ void compute_pp_grad(const _ftype128 *__restrict__ p,
     // Compute dp/dx
     #pragma unroll
     for (int k = 0; k < 8; ++k) {
-        pp_x.col<0>(k) = (pp_x.col<1>(k) - pp_x.col<0>(k)) * _D_DX_RCP;
+        pp_x.col<0>(k) = (pp_x.col<1>(k) - pp_x.col<0>(k)) * -_D_DX_RCP;
 #ifdef FLOAT
-        pp_x.col<1>(k) = (pp_x.col<2>(k) - pp_x.col<1>(k)) * _D_DX_RCP;
-        pp_x.col<2>(k) = (pp_x.col<3>(k) - pp_x.col<2>(k)) * _D_DX_RCP;
+        pp_x.col<1>(k) = (pp_x.col<2>(k) - pp_x.col<1>(k)) * -_D_DX_RCP;
+        pp_x.col<2>(k) = (pp_x.col<3>(k) - pp_x.col<2>(k)) * -_D_DX_RCP;
 #endif
 
         if (k < 7) { // should be folded, right?
-#ifdef FLOAT
-            pp_x.col<3>(k) = (pp_x.col<0>(k + 1) -
-                              pp_x.col<2>(k)) * _D_DX_RCP;
-#else
-            pp_x.col<1>(k) = (pp_x.col<0>(k + 1) -
-                              pp_x.col<1>(k)) * _D_DX_RCP;
-#endif
+            pp_x.col<VEC_LENGTH - 1>(k) =
+                (pp_x.col<0>(k + 1) -
+                 pp_x.col<VEC_LENGTH - 1>(k)) * -_D_DX_RCP;
         } else {
             if (is_last_col) {
-#ifdef FLOAT
-                pp_x.col<3>(7) = 0;
-#else
-                pp_x.col<1>(7) = 0;
-#endif
+                pp_x.col<VEC_LENGTH - 1>(7) = 0;
             } else {
-                const int lane_idx = threadIdx.x % 8;
+                const int lane_idx = threadIdx.x % WARP_SIZE;
 
                 // WARNING: gather across 32 rows :/
                 ftype pp_next = *reinterpret_cast<const ftype *>(
                     p + width / VEC_LENGTH * lane_idx + 8) +
                     *reinterpret_cast<const ftype *>(
                         phi + width / VEC_LENGTH * lane_idx + 8);
-#ifdef FLOAT
-                pp_x.col<3>(7) = (pp_next - pp_x.col<3>(7)) * _D_DX_RCP;
-#else
-                pp_x.col<1>(7) = (pp_next - pp_x.col<1>(7)) * _D_DX_RCP;
-#endif
+
+                pp_x.col<VEC_LENGTH - 1>(7) =
+                    (pp_next - pp_x.col<VEC_LENGTH - 1>(7)) * -_D_DX_RCP;
             }
         }
     }
@@ -796,7 +790,7 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
     } else if (is_last_face) {
 
         WarpTile v;
-        v.load(vel - height * width, width);
+        v.load(vel - height * width / VEC_LENGTH, width);
 
         // Something similar to load_add would be useful,
         // perhaps something more generic. Like a macro
@@ -816,10 +810,10 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
             #pragma unroll
             for (int c = 0; c < VEC_LENGTH; ++c) {
                 ftype3 val =
-                    bc.get_u_delta_back(tk + (lane_idx % 8) * VEC_LENGTH + c,
-                                        tj + (lane_idx / 8) * 8 + j,
-                                        depth - 1,
-                                        timestep - 1);
+                    bc.get_u_back(tk + (lane_idx % 8) * VEC_LENGTH + c,
+                                  tj + (lane_idx / 8) * 8 + j,
+                                  depth - 1,
+                                  timestep - 1);
                 if constexpr (comp == COMP_X) {
                     bc_vals[c] = val.x;
                 } else { // comp == COMP_Y
@@ -838,8 +832,8 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
         // TODO: Also here, a load_add would be useful,
         // just like the cpu version
         WarpTile v_prev, v_next;
-        v_prev.load(vel - height * width, width);
-        v_next.load(vel + height * width, width);
+        v_prev.load(vel - height * width / VEC_LENGTH, width);
+        v_next.load(vel + height * width / VEC_LENGTH, width);
 
         #pragma unroll
         for (int j = 0; j < 8; ++j) {
@@ -855,13 +849,15 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
     WarpTile z;
     z.load(zeta, width);
 
-    if (!is_first_row || lane_idx >= 8) {
-        // TODO: only first subwarp has to fetch from gmem,
-        // others can use shuffles
-        dd.cols(0) +=
-            *(zeta + width / VEC_LENGTH * 8 * (lane_idx / 8)
-                   - width / VEC_LENGTH + (lane_idx % 8)) -
-            2 * z.cols(0) + z.cols(1);
+    const int quarter = lane_idx / 8;
+    const int strip = lane_idx % 8;
+
+    if (!is_first_row || quarter > 0) {
+        _ftype128 zprev =
+            *(zeta + width / VEC_LENGTH * 8 * quarter
+                   - width / VEC_LENGTH + strip);
+
+        dd.cols(0) += zprev - 2 * z.cols(0) + z.cols(1);
     }
 
     #pragma unroll
@@ -875,10 +871,10 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
         #pragma unroll
         for (int c = 0; c < VEC_LENGTH; ++c) {
             ftype3 val =
-                bc.get_u_delta_bottom(tk + (lane_idx % 8) * VEC_LENGTH + c,
-                                      height - 1,
-                                      ti,
-                                      timestep - 1);
+                bc.get_u_bottom(tk + (lane_idx % 8) * VEC_LENGTH + c,
+                                height - 1,
+                                ti,
+                                timestep - 1);
             if constexpr (comp == COMP_X) {
                 bc_vals[c] = val.x;
             } else { // comp == COMP_Z
@@ -899,7 +895,7 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
         // TODO: only last subwarp has to fetch from gmem,
         // others can use shuffles
         dd.cols(7) += z.cols(6) - 2 * z.cols(7) +
-                      *(zeta + width / VEC_LENGTH * (8 * (lane_idx / 8) + 1)
+                      *(zeta + width / VEC_LENGTH * (8 * (lane_idx / 8 + 1))
                         + (lane_idx % 8));
     }
 
@@ -922,17 +918,18 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
 
     ftype right_col = 0;
     if (is_last_col) {
-        ftype3 u = bc.get_u_delta_right(
-            width - 1, tj + lane_idx, ti, timestep - 1);
 
-        if constexpr (comp == COMP_Y) {
-            right_col = u.y;
-        } else { // comp == COMP_Z
-            right_col = u.z;
+        if constexpr (comp != COMP_X) {
+            ftype3 u = bc.get_u_right(
+                width - 1, tj + lane_idx, ti, timestep - 1);
+
+            if constexpr (comp == COMP_Y) {
+                right_col = u.y;
+            } else { // comp == COMP_Z
+                right_col = u.z;
+            }
         }
-
-    } else if (comp != COMP_X) {
-        // WARNING: gather across 32 rows :/
+    } else {
         right_col = (eta + lane_idx * (width / VEC_LENGTH) + 8)->x;
     }
 
@@ -952,7 +949,7 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
         ddx.col<0>(k) =
             e.col<VEC_LENGTH - 1>(k - 1) - 2 * e.col<0>(k) + e.col<1>(k);
 
-        ddx.col<1>(k) = e.col<0>(k) + -2 * e.col<1>(k);
+        ddx.col<1>(k) = e.col<0>(k) - 2 * e.col<1>(k);
 #ifdef FLOAT
         ddx.col<1>(k) += e.col<2>(k);
 #else
@@ -976,13 +973,10 @@ void compute_Dxx_Dyy_Dzz(const _ftype128 *__restrict__ eta,
     if (is_last_col && comp != COMP_X) {
         ddx.col<VEC_LENGTH - 1>(7) =
             (ftype) (4.0 / 3) * e.col<VEC_LENGTH - 2>(7) -
-            4 * e.col<VEC_LENGTH - 2>(7) +
+            4 * e.col<VEC_LENGTH - 1>(7) +
             (ftype) (8.0 / 3) * right_col;
-
-    } else if (is_last_col) { // comp == COMP_X
-        ddx.col<VEC_LENGTH - 1>(7) = 0; // f_x at the last column is not used
     } else {
-    ddx.col<VEC_LENGTH - 1>(7) =
+        ddx.col<VEC_LENGTH - 1>(7) =
             e.col<VEC_LENGTH - 2>(7) - 2 * e.col<VEC_LENGTH - 1>(7) + right_col;
     }
 
@@ -1080,7 +1074,7 @@ void compute_Dxx_rhs_tile(const _ftype128 *__restrict__ k,
     for (int j = 0; j < 8; ++j) {
 
         const uint64_t off =
-            width / VEC_LENGTH * (lane_idx / 8) * 8 + (lane_idx % 8);
+            width / VEC_LENGTH * ((lane_idx / 8) * 8 + j) + (lane_idx % 8);
 
         _ftype128 k_ = k[off];
 
@@ -1088,7 +1082,7 @@ void compute_Dxx_rhs_tile(const _ftype128 *__restrict__ k,
             _D_DT / ((ftype) 1 + _D_DT * _D_NU / (2 * k_));
 
         _ftype128 coeff =
-            (ftype) 1 - 2 * _D_DT * _D_NU / (2 * k_ + _D_DT + _D_NU);
+            (ftype) 1 - 2 * _D_DT * _D_NU / (2 * k_ + _D_DT * _D_NU);
 
         const uint32_t x = tk + VEC_LENGTH * (lane_idx % 8);
         const uint32_t y = tj + (lane_idx / 8) * 8 + j;
@@ -1432,6 +1426,13 @@ __global__ void solve_sweep_Dxx(GRID_CONSTANT const SolveDxxParams params)
         bw_params.tmp_f_z = tmp_f_z + bw_offset;
 
         // note that when storing back u, you need to store-add
+        // The backward substitution starts from the last column's
+        // solution, which is the BC for x and the directly solved
+        // tangential components.
+        bw_params.u_x_prev = un.x;
+        bw_params.u_y_prev = un_y;
+        bw_params.u_z_prev = un_z;
+
 #ifdef FLOAT
         bw_params.u_x_t.col<3>(7) = un.x;
         bw_params.u_y_t.col<3>(7) = un_y;

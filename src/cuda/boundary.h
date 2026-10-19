@@ -2,13 +2,9 @@
 #define CUDA_BOUNDARY_H
 
 #include "ftype.h"
+#include "consts.h"
 
 // TODO: Move to separate header
-__constant__ ftype _D_DX;
-__constant__ ftype _D_DT;
-__constant__ ftype _D_NU;
-__constant__ ftype _D_DX_RCP;
-
 // Dirichlet boundary conditions for velocity
 template<typename FuncX, typename FuncY, typename FuncZ>
 struct BoundaryConditions
@@ -165,7 +161,7 @@ struct ManUx
     __device__ __forceinline__
     ftype operator()(ftype x, ftype y, ftype z, ftype t) const
     {
-        return 1;//sin(x) * cos(y + t) * sin(z);
+        return sin(x) * cos(y + t) * sin(z);
     }
 };
 
@@ -176,7 +172,7 @@ struct ManUy
     __device__ __forceinline__
     ftype operator()(ftype x, ftype y, ftype z, ftype t) const
     {
-        return 1;//cos(x) * sin(y + t) * sin(z);
+        return cos(x) * sin(y + t) * sin(z);
     }
 };
 
@@ -187,7 +183,7 @@ struct ManUz
     __device__ __forceinline__
     ftype operator()(ftype x, ftype y, ftype z, ftype t) const
     {
-        return 1;//2 * cos(x) * cos(y + t) * cos(z);
+        return 2 * cos(x) * cos(y + t) * cos(z);
     }
 };
 
